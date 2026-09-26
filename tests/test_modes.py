@@ -1,7 +1,9 @@
 import pytest
 import sympy as sym
 
-from circuit_quantization import Branch, Circuit, check_basis, decouple, lagrangian, mode_basis
+from circuit_quantization import (
+    Branch, Circuit, check_basis, decouple, lagrangian, mode_basis, residual_freedom, transform,
+)
 from circuit_quantization.modes import subspaces
 from circuits import (
     COUPLED_ZERO_PI_TYPES, COUPLED_ZERO_PI_Z, HARMONIUM_Z, RHOMBUS_Z, ZERO_PI_Z,
@@ -174,3 +176,36 @@ def test_coupled_zero_pis_give_pure_theta_theta_coupling():
     expected[1, 1] = expected[4, 4] = 1 / Cp
     expected[2, 2] = expected[5, 5] = 1 / (2 * C + C0 + Cc)
     assert zero(coords.C_tilde_inv - expected)
+
+
+def test_residual_freedom_patterns():
+    lag = lagrangian(kite())
+    Z, types = mode_basis(lag)
+    coords = decouple(lag, Z, types)  # types (c, e, h)
+    a = residual_freedom(coords)
+    b = residual_freedom(coords, keep_harmonic=False)
+    nonzero = lambda S: [[int(x != 0) for x in S.row(i)] for i in range(3)]  # noqa: E731
+    assert nonzero(a) == [[1, 1, 0], [0, 1, 0], [0, 1, 1]]  # S_{1,a}, eq:S1_structure
+    assert nonzero(b) == [[1, 1, 0], [0, 1, 1], [0, 1, 1]]  # S_{1,b}
+
+
+def test_transform_is_a_congruence_and_updates_types():
+    lag = lagrangian(kite())
+    Z, types = mode_basis(lag)
+    coords = decouple(lag, Z, types)
+    S = sym.Matrix([[1, 1, 0], [0, 1, 1], [0, 0, 1]])
+    new = transform(coords, S)
+    assert new.types == ("c", "e", "e")  # S_eh != 0 promotes harmonic to extended
+    assert zero(new.C_tilde - S.T * coords.C_tilde * S)
+    assert new.Z == coords.Z * S
+
+
+@pytest.mark.parametrize("S, message", [
+    (sym.Matrix([[1, 0, 0], [0, 1, 0], [1, 0, 1]]), "mixes 'h' into 'c'"),
+    (sym.Matrix([[2, 0, 0], [0, 1, 0], [0, 0, 1]]), "GL"),
+])
+def test_transform_rejects_disallowed_mixing(S, message):
+    lag = lagrangian(kite())
+    coords = decouple(lag, *mode_basis(lag))
+    with pytest.raises(ValueError, match=message):
+        transform(coords, S)

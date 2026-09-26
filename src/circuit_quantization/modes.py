@@ -200,3 +200,54 @@ def decouple(lag, Z_full, types):
         if (Z_1.T * form * Z_2).applyfunc(sym.cancel) != sym.zeros(Z_1.cols, Z_2.cols):
             raise AssertionError(f"Nonzero {name} cross block after decoupling (eq:ZY_blocks)")
     return coordinates(lag, Z_1, retained_types)
+
+
+# --- residual freedom -------------------------------------------------------
+
+# (old type, new type) pairs a column may be mixed along, eq:S1_structure.
+_S1a = {("c", "c"), ("c", "e"), ("e", "e"), ("h", "e"), ("h", "h")}
+_S1b = _S1a | {("e", "h")}
+
+
+def residual_freedom(coords, keep_harmonic=True):
+    """Symbolic S_1 with free entries where eq:S1_structure allows them.
+
+    keep_harmonic=True gives S_{1,a}; False gives S_{1,b}, which lets harmonic
+    columns acquire extended components. S_cc must also lie in GL(N_c, Z)
+    (eq:Scc_unimodular); transform() checks that once values are chosen.
+    """
+    allowed = _S1a if keep_harmonic else _S1b
+    types = coords.types
+    return sym.Matrix(
+        len(types), len(types),
+        lambda i, j: sym.Symbol(f"s_{i + 1}_{j + 1}") if (types[i], types[j]) in allowed else 0,
+    )
+
+
+def transform(coords, S1):
+    """Apply Z -> Z S_1 to the retained coordinates (eq:S1_structure, eq:Scc_unimodular)."""
+    S = sym.Matrix(S1)
+    types = coords.types
+    if S.shape != (len(types), len(types)) or sym.simplify(S.det()) == 0:
+        raise ValueError("S1 must be square, invertible, and match the retained modes")
+    for i in range(S.rows):
+        for j in range(S.cols):
+            if S[i, j] != 0 and (types[i], types[j]) not in _S1b:
+                raise ValueError(f"S1[{i}, {j}] mixes {types[i]!r} into {types[j]!r} (eq:S1_structure)")
+    compact = [j for j, t in enumerate(types) if t == "c"]
+    S_cc = S.extract(compact, compact).applyfunc(sym.simplify)
+    if compact and (not all(_is_integer(x) for x in S_cc) or abs(S_cc.det()) != 1):
+        raise ValueError("S_cc must lie in GL(N_c, Z) (eq:Scc_unimodular)")
+    new_types = tuple(
+        "e" if t == "h" and any(S[i, j] != 0 for i, u in enumerate(types) if u == "e") else t
+        for j, t in enumerate(types)
+    )
+    freeze = sym.ImmutableMatrix
+    C_tilde = (S.T * coords.C_tilde * S).applyfunc(sym.cancel)
+    return Coordinates(
+        Z=freeze(coords.Z * S), types=new_types, C_tilde=freeze(C_tilde),
+        C_tilde_inv=freeze(C_tilde.inv().applyfunc(sym.cancel)),
+        Lstar_tilde=freeze((S.T * coords.Lstar_tilde * S).applyfunc(sym.cancel)),
+        omega_J_tilde=freeze(S.T * coords.omega_J_tilde),
+        omega_L_tilde=freeze(S.T * coords.omega_L_tilde),
+    )

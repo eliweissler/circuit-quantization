@@ -2,7 +2,7 @@
 
 from .circuit import Branch, Circuit, Loops, fundamental_cycles, incidence
 from .lagrangian import lagrangian
-from .modes import check_basis, decouple, mode_basis
+from .modes import check_basis, decouple, mode_basis, residual_freedom, transform
 from .units import (
     farad_to_ghz,
     ghz_to_farad,
