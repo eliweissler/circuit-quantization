@@ -1,0 +1,53 @@
+Notebook[{
+Cell["cos(2 phi) transmon (KITE): variable transformation and irrotational flux assignment", "Title"],
+Cell["Companion to Appendix B.3 of full_matrix_quantization.tex. Node 1 is the island, nodes 2 and 3 the arm midpoints, node 4 ground. Branch order (CS, J1, J2, L1, L2).", "Text"],
+Cell["General functions", "Section"],
+Cell["ClearAll[CircuitIncidenceMatrix, IrrotationalAssignment];
+CircuitIncidenceMatrix[edges_List, nodes_List] := Table[
+   Boole[nodes[[i]] === edges[[j, 1]]] - Boole[nodes[[i]] === edges[[j, 2]]],
+   {i, Length[nodes]}, {j, Length[edges]}];
+IrrotationalAssignment[g_, oi_, cb_, z_] := Module[{ct, gp, p},
+   ct = Transpose[z] . oi . cb . Transpose[oi] . z;
+   gp = Transpose[g] . Inverse[g . Transpose[g]];
+   p = Transpose[oi] . z . Inverse[ct] . Transpose[z] . oi . cb;
+   Simplify[(IdentityMatrix[Length[cb]] - p) . gp]];", "Input"],
+Cell["1. Circuit topology and incidence matrices", "Section"],
+Cell["nodes = Range[1, 4];
+edges = {{1, 4}, {1, 2}, {1, 3}, {2, 4}, {3, 4}};
+Om = CircuitIncidenceMatrix[edges, nodes];
+Oi = Om[[1 ;; 3, All]];
+{MatrixRank[Om], Length[edges] - MatrixRank[Om]}
+Om // MatrixForm", "Input"],
+Cell["2. Symbolic element matrices", "Section"],
+Cell["Cb = DiagonalMatrix[{CS, CJ1, CJ2, 0, 0}];
+LbInv = DiagonalMatrix[{1/L1, 1/L2}];
+wJ = Oi[[All, {2, 3}]]; wL = Oi[[All, {4, 5}]];
+Cint = Simplify[Oi . Cb . Transpose[Oi]];
+Lint = Simplify[wL . LbInv . Transpose[wL]];
+Cint // MatrixForm
+Factor[Det[Cint]]
+Lint // MatrixForm", "Input"],
+Cell["3. Island and internal arm modes (varphi, phiDelta, phiSigma)", "Section"],
+Cell["Z = {{1, 0, 0}, {0, 1, 1}, {0, -1, 1}};
+Inverse[Z] // MatrixForm
+Ct = Simplify[Transpose[Z] . Cint . Z];
+Simplify[Inverse[Ct]] // MatrixForm
+Simplify[Transpose[Z] . Lint . Z] // MatrixForm
+Simplify[Transpose[wJ] . Z] // MatrixForm
+Simplify[Transpose[wL] . Z] // MatrixForm", "Input"],
+Cell["4. Loop and irrotational constraints", "Section"],
+Cell["G = {{0, 1, -1, 1, -1}, {1, -1, 0, -1, 0}};
+Simplify[G . Transpose[Om]]
+B = IrrotationalAssignment[G, Oi, Cb, Z];
+B // MatrixForm
+Simplify[G . B]
+Simplify[Transpose[Z] . Oi . Cb . B]", "Input"],
+Cell["5. Flux dependence", "Section"],
+Cell["fe = {Fext, 0};
+branch = Simplify[Transpose[Oi] . Z . {vphi, pD, pS} + B . fe];
+jPhases = branch[[{2, 3}]]
+lPhases = branch[[{4, 5}]]
+Simplify[-EJ1 Cos[jPhases[[1]]] - EJ2 Cos[jPhases[[2]]]]
+Simplify[(lPhases . LbInv . lPhases)/2]", "Input"],
+Cell["At EJ1 == EJ2 the junction pair collapses to a product of cosines about the kite phase vphi - pS.", "Text"]
+}]

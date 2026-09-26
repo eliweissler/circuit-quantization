@@ -1,0 +1,475 @@
+\documentclass[10pt,aps,pra,onecolumn,superscriptaddress,floatfix,nofootinbib]{revtex4-2}
+
+%=============================================================================
+% BEGIN UNFORGIVABLE HACKS (to get title in references)
+%=============================================================================
+\makeatletter
+\def\@bibdataout@aps{%
+ \immediate\write\@bibdataout{%
+  @CONTROL{%
+   apsrev41Control,author="08",editor="1",pages="0",title="0",year="1",eprint="1"%
+  }%
+ }%
+ \if@filesw
+  \immediate\write\@auxout{\string\citation{apsrev41Control}}%
+ \fi
+}%
+\makeatother
+%=============================================================================
+% END UNFORGIVABLE HACKS
+%=============================================================================
+
+\usepackage{soul}
+\usepackage[T1]{fontenc}
+\usepackage{amsfonts,amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage[usenames,dvipsnames]{xcolor}
+\usepackage{circuitikz}
+\usepackage{standalone}
+
+% Custom Josephson junction bipole for CircuiTikZ (zero-length along wire: unbroken continuous wire with cross)
+\ctikzset{bipoles/josephson/height/.initial=.45}
+\ctikzset{bipoles/josephson/width/.initial=0}
+\makeatletter
+\pgfcircdeclarebipolescaled{misc}
+{}
+{\ctikzvalof{bipoles/josephson/height}}
+{josephson}
+{\ctikzvalof{bipoles/josephson/height}}
+{\ctikzvalof{bipoles/josephson/width}}
+{
+    \pgf@circ@setlinewidth{bipoles}{\pgfstartlinewidth}
+    \pgfscope
+        \pgfpathmoveto{\pgfpoint{-\pgf@circ@res@up}{-\pgf@circ@res@up}}
+        \pgfpathlineto{\pgfpoint{\pgf@circ@res@up}{\pgf@circ@res@up}}
+        \pgfpathmoveto{\pgfpoint{-\pgf@circ@res@up}{\pgf@circ@res@up}}
+        \pgfpathlineto{\pgfpoint{\pgf@circ@res@up}{-\pgf@circ@res@up}}
+    \endpgfscope
+    \pgfusepath{stroke}
+}
+\def\pgf@circ@josephson@path#1{\pgf@circ@bipole@path{josephson}{#1}}
+\tikzset{josephson/.style = {\circuitikzbasekey, /tikz/to path=\pgf@circ@josephson@path, l=#1}}
+\makeatother
+
+\usetikzlibrary{positioning,decorations.pathreplacing}
+
+\usepackage[breaklinks=true]{hyperref}
+\hypersetup{
+  colorlinks   = true,
+  urlcolor     = blue,
+  linkcolor    = blue,
+  citecolor    = red
+}
+\usepackage[noabbrev]{cleveref}
+
+\crefformat{equation}{Eq.~(#2#1#3)}
+\crefformat{section}{Sec.~#2#1#3}
+\Crefformat{equation}{Equation~(#2#1#3)}
+\crefformat{figure}{Fig.~#2#1#3}
+\crefrangeformat{equation}{Eqs.~#3(#1)#4--#5(#2)#6}
+\crefmultiformat{equation}{Eqs.~(#2#1#3)}{ and~(#2#1#3)}{, (#2#1#3)}{ and~(#2#1#3)}
+
+%=============================================================================
+% BEGIN MACROS (subset of circuit_quantization/main.tex actually used below)
+%=============================================================================
+\newcommand{\half}{\tfrac{1}{2}}
+\newcommand{\smallfrac}[2]{\mbox{$\frac{#1}{#2}$}}
+\newcommand{\unitsof}[1]{\ensuremath{\left[\mathrm{#1}\right]}}
+\newcommand{\nn}{\nonumber}
+
+\newcommand{\blu}[1]{\textcolor{blue}{#1}}
+% cir_enum.bib carries language fields; revtex emits \selectlanguage, which needs babel
+\makeatletter
+\AtBeginDocument{\let\selectlanguage\@gobble}
+\makeatother
+
+\newcommand{\ewc}[1]{{\blu{ [[EW: {#1}]]}}}
+\newcommand{\ew}[1]{{\blu {#1}}}
+%=============================================================================
+% END MACROS
+%=============================================================================
+
+\begin{document}
+
+\hfuzz=150pt
+\hbadness=10000
+
+\title{Matrix Formulation of Circuit Quantization: Lagrangian, External Flux, and Frequency Units}
+
+\author{Eli J. Weissler}
+\email[]{eli.weissler@colorado.edu}
+\affiliation{Electrical, Computer, and Energy Engineering, University of Colorado Boulder, Colorado 80309, USA}
+
+\date{\today}
+
+\begin{abstract}
+This note details how to construct a symbolic quantum Hamiltonian from a lumped element circuit made of capacitors, inductors, and Josephson junctions. Beginning with constitutive element relations and branch variables, we define a matrix form of the node-flux circuit Lagrangian and Hamiltonian. We consider truncation of non-dynamical variables, external flux and classical voltage drives, and time-dependent external flux dependence.
+\end{abstract}
+\maketitle
+
+\tableofcontents
+
+\newpage
+\section{Defining a Circuit}\label{circuit_def}
+
+We take a circuit to be specified by four inputs:
+\begin{enumerate}
+    \item {\bf Circuit branches}. $N_b$ internal branches, each specifying the connected nodes, the elements the branch carries, and their parameter values.
+    \item {\bf A choice of ground node}. For a floating circuit, the ground node is isolated and removed automatically as a non-dynamical mode.
+    \item {\bf Connections to voltage sources}. Ideal classical voltage sources driving the circuit through coupling capacitors. Each voltage source connects a source node to ground.
+    \item {\bf Flux biases}. The circuit loops threaded by external magnetic flux, as discussed in \cref{apx:flux_assign}.
+\end{enumerate}
+We treat capacitance as an attribute that any branch may carry, denoted $C_k$ for branch $k$, rather than as a branch type of its own.
+A branch is classified instead by its \emph{flux-dependent} element, meaning the element whose energy depends on the branch flux $\Phi_b$ rather than on the branch voltage $\dot\Phi_b$ alone.
+We make the following standard physical assumptions:
+\begin{enumerate}
+    \item Every branch connects two distinct nodes (no self-loops).
+    \item Every branch carries at most one flux-dependent element, either a linear inductance $L_k > 0$ or a Josephson energy $E_{J_k} > 0$, together with a capacitance $C_k \geq 0$.
+    \item Every Josephson junction has a non-zero intrinsic capacitance $C_{J_k} > 0$.
+    \item Linear inductors may have $C_k = 0$ or $C_k > 0$, and are the only branches free to fall either way.
+    \item Voltage sources are treated as ideal and therefore have $C_k = 0$.
+    \item Every branch that is not a voltage source and has neither a linear inductance nor a Josephson energy is a pure capacitance and must have $C_k > 0$.
+\end{enumerate}
+These assumptions define a lumped-element model, which fixes what the rest of this note can determine.
+Each $C_k$ is a constant of that model, set by the layout and independent of the drive, and the external magnetic field enters only as the loop fluxes $\Phi_{\rm ext}(t)$ of \cref{apx:flux_assign}.
+Resolving a field structured on the scale of the device into that data is a continuum electromagnetic question beyond the scope of this note \cite{RiwarDiVincenzo2022,Rajmohan2022}.
+
+The asymmetry between junctions and inductors here is significant.
+An inductively shunted circuit island, with $C_k = 0$ on the shunt branches, leads to a non-dynamical ``frozen mode'', which can be removed as a single-valued constraint.
+A similar island shunted by junctions with $C_{J_k} = 0$ can instead lead to a multi-valued constraint, the resolution of which remains an open question in general \cite{Eguisquiz_Reply_Consistent_2025,rymarz_consistent_2023}. Rather than attempt to resolve that question, we simply assume $C_{J_k} > 0$ for every junction, which is the case in all practical superconducting circuits.
+
+Co-located capacitance can equivalently be represented by a separate capacitor branch in parallel, and the two descriptions agree.
+The parallel pair forms a loop that encloses no area, so \cref{eq:faraday_block} forces the two branch voltages equal and ties the two branches to the same row of the flux-assignment matrix.
+That extra loop is capacitively broken, so by \cref{eq:Gsc_Bcb_zero} a static flux through it threads no superconducting loop and leaves the Hamiltonian unchanged.
+The co-located form asserts more than this, namely that the loop carries no flux at all, so that the two branches share one voltage; this is the right model whenever the capacitive path encloses no area against the inductive one.
+We prefer the co-located form for economy, since it costs one branch and one loop fewer, and because it keeps each capacitance attached to the element it belongs to and visible to the irrotational condition of \cref{apx:tdflux}.
+
+\subsection{Admissible Elements}\label{sec:elements}
+
+Four elements are admissible: capacitances, Josephson junctions, linear inductances, and ideal voltage sources.
+\Cref{tab:elements} collects their branch relations, written in terms of the branch flux $\Phi_{b,k}$ and branch voltage $\dot\Phi_{b,k}$ defined in \cref{apx:flux_assign}, and \cref{fig:elements_variables} places them among the four circuit variables.
+
+\begin{table}[t]
+    \centering
+    \setlength{\tabcolsep}{10pt}
+    \begin{tabular}{l c c c}
+        \toprule
+        Element & Parameter & Branch relation & Energy \\
+        \midrule
+        Capacitance & $C_k \geq 0$ & $Q_{b,k} = C_k\dot\Phi_{b,k}$ & $\frac{1}{2}C_k\dot\Phi_{b,k}^2$ \\[4pt]
+        Josephson junction & $E_{J_k} > 0$ & $I_{b,k} = \frac{2\pi E_{J_k}}{\Phi_0}\sin(2\pi\Phi_{b,k}/\Phi_0)$ & $-E_{J_k}\cos(2\pi\Phi_{b,k}/\Phi_0)$ \\[4pt]
+        Linear inductance & $L_k > 0$ & $I_{b,k} = \Phi_{b,k}/L_k$ & $\Phi_{b,k}^2/2L_k$ \\[4pt]
+        Ideal voltage source & $V_k(t)$ & $\dot\Phi_{b,k} = V_k(t)$ & --- \\
+        \bottomrule
+    \end{tabular}
+    \caption{The four admissible elements, with $Q_{b,k}$ the charge on branch $k$ and $I_{b,k}$ the current through it.
+    A capacitance responds to the branch voltage $\dot\Phi_{b,k}$, while a junction and a linear inductance respond to the branch flux $\Phi_{b,k}$; this is the distinction that classifies a branch by its flux-dependent element.
+    An ideal voltage source prescribes its own branch voltage and stores no energy.
+    Summing the last column over all branches gives \cref{eq:T_full_branch,eq:U_full_branch}.
+    Energies are in SI units; \cref{apx:params} rescales them to frequencies.}
+    \label{tab:elements}
+\end{table}
+
+\begin{figure}[t]
+    \centering
+    \resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+    var/.style={draw, rounded corners=2pt, minimum width=1.5cm, minimum height=0.8cm},
+    rel/.style={Blue, -latex, semithick},
+    lbl/.style={Blue, font=\small, inner sep=2pt},
+    dlbl/.style={Blue, font=\small, inner sep=3pt, fill=white, align=center},
+    note/.style={ForestGreen, font=\footnotesize},
+    brc/.style={decorate, decoration={brace, amplitude=5pt}}
+]
+% ---------------- (a) elements ----------------
+\node[font=\itshape] at (1.6,3.9) {elements};
+\foreach \y/\name/\sym in {2.7/C/C, 1.8/L/L, 0.9/V/sV, -0.2/J/josephson} {
+    \node[anchor=east] at (0.35,\y) {$\name$:};
+    \draw (0.5,\y) to[\sym] (2.7,\y);
+}
+\draw[brc] (2.95,2.95) -- (2.95,0.65) node[midway, right=7pt, font=\small] {Linear};
+\draw[brc] (2.95,0.05) -- (2.95,-0.45) node[midway, right=7pt, font=\small] {Nonlinear};
+
+\draw[gray!60] (4.9,-2.0) -- (4.9,4.2);
+
+% ---------------- (b) variables ----------------
+\begin{scope}[shift={(7.4,0)}]
+    \node[font=\itshape] at (3.3,3.9) {variables};
+    \node[font=\small] at (3.3,3.35) {$\{V, I, \Phi, Q, t\} \in \mathbb{R}$};
+
+    \node[var] (I) at (0,2.3) {$I(t)$};
+    \node[var] (Q) at (6.6,2.3) {$Q(t)$};
+    \node[var] (V) at (0,-1.4) {$V(t)$};
+    \node[var] (F) at (6.6,-1.4) {$\Phi(t)$};
+
+    \node[note, anchor=east] at (-0.9,2.3) {current};
+    \node[note, anchor=west, align=left] at (7.5,2.3) {charge\\(on capacitor)};
+    \node[note, anchor=east] at (-0.9,-1.4) {voltage};
+    \node[note, anchor=west, align=left] at (7.5,-1.4) {flux\\(through inductor)};
+
+    \draw[rel] ([yshift=3pt]I.east) -- node[lbl, above]{$\dot{Q} = I$} ([yshift=3pt]Q.west);
+    \draw[rel] ([yshift=-3pt]Q.west) -- node[lbl, below]{$Q = \int I\,dt$} ([yshift=-3pt]I.east);
+    \draw[rel] ([yshift=3pt]V.east) -- node[lbl, above]{$\dot{\Phi} = V$} ([yshift=3pt]F.west);
+    \draw[rel] ([yshift=-3pt]F.west) -- node[lbl, below]{$\Phi = \int V\,dt$} ([yshift=-3pt]V.east);
+
+    \draw[rel, latex-latex] (V.north east) --
+        node[dlbl, pos=0.74]{$Q = CV$\\[-1pt] {\color{ForestGreen}\tiny capacitance}} (Q.south west);
+    \draw[rel, latex-latex] (I.south east) --
+        node[dlbl, pos=0.26]{$\Phi = LI$\\[-1pt] {\color{ForestGreen}\tiny inductance}} (F.north west);
+\end{scope}
+\end{tikzpicture}%
+    }
+    \caption{The admissible elements and the variables they relate.
+    Left: the four elements of \cref{tab:elements}, with the capacitor, inductor, and ideal voltage source linear in their branch relation and the Josephson junction not.
+    Right: the variables of a linear $LC$ in parallel, with the horizontal relations kinematic and the diagonals the constitutive relations of the two linear elements.
+    For this circuit $\Phi$ is the physical flux through the inductor and $Q$ the charge on the capacitor.
+    The branch fluxes of \cref{apx:flux_assign} share the definition $\Phi_{b,k} = \int V_{b,k}\,dt$ but are generalized coordinates, and take that physical reading only on an inductive branch.
+    A junction replaces $\Phi = LI$ on the same diagonal by $I = I_c\sin(2\pi\Phi/\Phi_0)$ with $I_c = 2\pi E_{J}/\Phi_0$, and an ideal voltage source prescribes $V(t)$ outright, fixing the bottom edge rather than a diagonal.}
+    \label{fig:elements_variables}
+\end{figure}
+
+The capacitance is the only element that may share a branch with another, and the only one to depend on $\dot\Phi_{b,k}$ rather than $\Phi_{b,k}$.
+It is therefore an attribute rather than a branch type, which is why $C_b$ of \cref{eq:Cb_diag} runs over all $N_b$ branches while $L_b^{-1}$ is restricted to $\mathcal{S}_L$.
+The junction and the linear inductance are the two flux-dependent elements, and a branch carries at most one of them.
+For small $\Phi_{b,k}$ the junction reduces to a linear inductance $(\Phi_0/2\pi)^2/E_{J_k}$, and it differs from one by the periodicity that admits the compact modes of \cref{tab:var_basis}.
+An ideal voltage source stores no energy and carries $C_k = 0$, so it reaches the Lagrangian only through the coupling capacitors that terminate on it.
+
+\subsection{Circuit Multigraph \& Incidence Matrix}
+
+We represent the full driven circuit as a directed multigraph $\mathcal{G} = (\mathcal{V}, \mathcal{E})$ with $N_v$ vertices and $N_b$ edges.
+There is a one-to-one correspondence between graph vertices/circuit nodes and graph edges/circuit branches.
+We partition $\mathcal{V}$ into three disjoint subsets
+\begin{align}
+    \mathcal{V} = \mathcal{V}_{\rm int} \cup \mathcal{V}_{\rm gnd} \cup \mathcal{V}_{\rm src} \, ,
+\end{align}
+where:
+\begin{enumerate}
+    \item $\mathcal{V}_{\rm int} = \{1, \dots, N_{\rm int}\}$ contains the $N_{\rm int}$ internal nodes.
+    \item $\mathcal{V}_{\rm gnd} = \{N_{\rm int} + 1\}$ contains the ground node held at fixed potential $V_{\rm gnd} = 0$.
+    \item $\mathcal{V}_{\rm src} = \{N_{\rm int} + 2, \dots, N_v\}$ contains $N_{\rm src}$ classical source nodes with prescribed voltage $V(t) \in \mathbb{R}^{N_{\rm src}}$.
+\end{enumerate}
+We also partition the edge set $\mathcal{E}$ by physical element type
+\begin{align}
+    \mathcal{E} = \mathcal{S}_C \cup \mathcal{S}_J \cup \mathcal{S}_L \cup \mathcal{S}_V \, ,
+\end{align}
+where $\mathcal{S}_J$ contains the $N_J$ branches carrying a Josephson energy, $\mathcal{S}_L$ the $N_L$ branches carrying a linear inductance, $\mathcal{S}_C$ the $N_C$ branches carrying no flux-dependent element at all (including the coupling capacitors that terminate on voltage sources), and $\mathcal{S}_V$ the $N_{\rm src}$ ideal voltage sources.
+The total number of branches is $N_b = N_C + N_J + N_L + N_{\rm src}$.
+Capacitance does not enter this partition.
+Any branch in $\mathcal{S}_C \cup \mathcal{S}_J \cup \mathcal{S}_L$ may carry one, and all of them are collected in \cref{eq:Cb_diag} below.
+
+The incidence matrix $\Omega \in \{0,\pm 1\}^{N_v \times N_b}$ encodes the connectivity of the graph.
+Column $k$ has $+1$ at the source vertex and $-1$ at the target vertex of branch $k$.
+This orientation choice is purely conventional, as all elements considered are reciprocal.
+It is only necessary that the loop definitions in \cref{apx:flux_assign} are chosen consistently with $\Omega$.
+Ordering the columns by element type gives
+\begin{align}
+    \Omega = \begin{bmatrix} \omega_C & \omega_J & \omega_L & \omega_V \end{bmatrix} \, ,
+    \label{eq:Omega_columns}
+\end{align}
+where the submatrices $\omega_C, \omega_J, \omega_L, \omega_V$ collect the columns corresponding to each branch set.
+We will also need the row blocks of $\Omega$ selected by the node partition, written $\Omega_{\rm int}$, $\Omega_{\rm gnd}$, and $\Omega_{\rm src}$, with $N_{\rm int}$, $1$, and $N_{\rm src}$ rows respectively.
+
+As a concrete example, consider the circuit in \cref{fig:coupled_circuit_example}.
+The graph has $N_v = 7$ nodes partitioned into internal nodes $\mathcal{V}_{\rm int} = \{1, 2, 3\}$, ground reference $\mathcal{V}_{\rm gnd} = \{4\}$, and classical source nodes $\mathcal{V}_{\rm src} = \{5, 6, 7\}$.
+Node $3$ is the floating island the transmon sits on, reaching the rest of the circuit through $C_t$, $J_1$, $J_2$, and the island capacitance $C_g$ to ground.
+The set $\mathcal{S}_C$ contains $8$ branches carrying a capacitance alone: internal capacitors $\{C_t, C_c, C_f\}$, the island capacitance $C_g$, and gate capacitors $\{C_{V,1}, C_{V,2}, C_{V,3}, C_{V,4}\}$.
+The junction, inductive, and source sets are $\mathcal{S}_J = \{J_1, J_2, J_3\}$, $\mathcal{S}_L = \{L_f\}$, and $\mathcal{S}_V = \{V_1, V_2, V_3\}$.
+With rows ordered by $(1, 2, 3 \mid 4 \mid 5, 6, 7)^T$, the type-restricted incidence submatrices are
+\begin{align}
+    \omega_C &= \begin{pmatrix}
+        1 & 1 & 0 & 1 & 1 & 0 & 0 & 0 \\
+        0 & -1 & 1 & 0 & 0 & 1 & 1 & 0 \\
+        -1 & 0 & 0 & 0 & 0 & 0 & 0 & 1 \\
+        0 & 0 & -1 & 0 & 0 & 0 & 0 & -1 \\
+        0 & 0 & 0 & -1 & 0 & 0 & 0 & 0 \\
+        0 & 0 & 0 & 0 & -1 & -1 & 0 & 0 \\
+        0 & 0 & 0 & 0 & 0 & 0 & -1 & 0
+    \end{pmatrix}, \quad
+    \omega_J = \begin{pmatrix}
+        1 & 1 & 0 \\
+        0 & 0 & 1 \\
+        -1 & -1 & 0 \\
+        0 & 0 & -1 \\
+        0 & 0 & 0 \\
+        0 & 0 & 0 \\
+        0 & 0 & 0
+    \end{pmatrix}, \quad
+    \omega_L = \begin{pmatrix}
+        0 \\ 1 \\ 0 \\ -1 \\ 0 \\ 0 \\ 0
+    \end{pmatrix}, \quad 
+    \omega_V = \begin{pmatrix}
+        0 & 0 & 0 \\
+        0 & 0 & 0 \\
+        0 & 0 & 0 \\
+        1 & 1 & 1 \\
+        -1 & 0 & 0 \\
+        0 & -1 & 0 \\
+        0 & 0 & -1
+    \end{pmatrix} \, .
+    \label{eq:example_omega_sub}
+\end{align}
+
+\subsection{Branch Variables \& External Flux}\label{apx:flux_assign}
+
+In this section, we define circuit variables and resolve constraints that arise due to external flux.
+We begin by defining the generalized branch flux,
+\begin{align}
+    \Phi_b(t) = \int_{-\infty}^t V_b(t')\,dt' \, ,
+\end{align}
+as the integrated voltage $V_b$ across the branch.
+The integral carries an arbitrary lower limit, so $\Phi_b$ is defined only up to an additive constant unless something in the circuit fixes it.
+A flux-dependent element does fix it, storing energy as a function of $\Phi_b$ itself, while branches without one store energy as a function of $V_b = \dot\Phi_b$ alone.
+We therefore split the branches into
+\begin{align}
+    \mathcal{S}_{\rm ind} = \mathcal{S}_J \cup \mathcal{S}_L \, , \qquad \mathcal{S}_{\rm cap} = \mathcal{S}_C \cup \mathcal{S}_V \, ,
+    \label{eq:branch_split}
+\end{align}
+and carry $\Phi_b$ on $\mathcal{S}_{\rm ind}$ but only $\dot\Phi_b$ on $\mathcal{S}_{\rm cap}$.
+This is the classification by flux-dependent element of \cref{circuit_def}, and a branch capacitance does not affect it.
+An inductor with co-located capacitance still fixes its own branch flux through its inductance, and so belongs to $\mathcal{S}_{\rm ind}$.
+Branch variables are not independent.
+First, from fluxoid quantization, the sum of branch fluxes around any inductive loop $\ell$ must equal the external flux threading that loop, 
+\begin{align}\label{eq:fluxoid}
+\sum_{k\in\ell}\Phi_{b,k} = \Phi_{{\rm ext},\ell} \,. 
+\end{align}
+Second, Faraday's law relates changes in these external fluxes to the voltages induced across the branches
+\begin{align}\label{eq:faraday_scalar}
+\dot\Phi_{{\rm ext},\ell} = \sum_{k\in\ell}V_k = \sum_{k\in\ell}\dot\Phi_{b,k} \, .
+\end{align}
+For fully inductive loops, \cref{eq:faraday_scalar} is simply the time derivative of \cref{eq:fluxoid}, but for loops broken by capacitors, \cref{eq:faraday_scalar} is a separate constraint on the branch fluxes \cite{YouKoch2019}.
+
+To represent these constraints in vector form, we establish one-to-one correspondence between physical circuit loops and cycles on the circuit graph.
+The cycle space of the multigraph is $\mathrm{null}(\Omega)$, meaning all $v$ such that $\Omega v = 0$. The number of independent loops in the circuit is its dimension, $N_\ell = \dim\mathrm{null}(\Omega) = N_b - \mathrm{rank}(\Omega)$. 
+We can choose a particular cycle basis with the loop matrix $\mathrm{G} \in \{0,\pm1\}^{N_\ell\times N_b}$. Any valid $\mathrm{G}$ must satisfy 
+\begin{align}\label{eq:G_OmegaT}
+    \mathrm{G}\Omega^T = 0 \, ,
+\end{align}
+with $N_\ell$ linearly independent rows, which together make its rows a basis of the cycle space. For simplicity, we order the loops into two blocks,
+\begin{align}
+    \mathrm{G} = \begin{pmatrix}\mathrm{G}_{\rm sc}\\ \mathrm{G}_{\rm cb}\end{pmatrix},
+    \qquad
+    \Phi_{\rm ext} = \begin{pmatrix}\Phi_{\rm ext, sc}\\ \Phi_{\rm ext, cb}\end{pmatrix} \, .
+    \label{eq:G_blocks}
+\end{align}
+The first block contains the $N_{\rm sc}$ \emph{superconducting} loops, closed entirely by branches in $\mathcal{S}_{\rm ind}$, and the second the $N_{\rm cb}$ \emph{capacitively broken} loops, which cross at least one branch in $\mathcal{S}_{\rm cap}$.
+A branch capacitance does not break a loop: a loop closing through an inductor with co-located capacitance is superconducting, because the inductor still fixes that branch flux.
+We take the rows of $\mathrm{G}_{\rm sc}$ to span the cycle space of the subgraph induced by $\mathcal{S}_{\rm ind}$, so that every superconducting loop is represented.
+Fluxoid quantization, \cref{eq:fluxoid}, applies to the superconducting block only,
+\begin{align}
+    \mathrm{G}_{\rm sc}\Phi_b = \Phi_{\rm ext, sc} \, ,
+    \label{eq:fluxoid_block}
+\end{align}
+while a capacitively broken loop carries no fluxoid condition, so Faraday's law, \cref{eq:faraday_scalar}, is the only constraint available there and it fixes the rate alone,
+\begin{align}
+    \mathrm{G}_{\rm cb}\dot\Phi_b = \dot\Phi_{\rm ext, cb} \, .
+    \label{eq:faraday_block}
+\end{align}
+Nothing couples the two blocks, so they may be imposed separately.
+
+Both constraints are linear, so a general solution is a homogeneous solution plus a particular one.
+A homogeneous solution satisfies $\mathrm{G}\Phi_b^{(h)} = 0$, which meets \cref{eq:fluxoid_block} and \cref{eq:faraday_block} at zero external flux, placing it in $\mathrm{null}(\mathrm{G})$.
+\Cref{eq:G_OmegaT} already supplies such vectors, since $\mathrm{G}\Omega^T\Phi = 0$ for any vector of node variables $\Phi \in \mathbb{R}^{N_v}$.
+A dimension count shows there are no others.
+The rows of $\mathrm{G}$ form a cycle basis, so $\mathrm{G}$ has full row rank $N_\ell$ and $\dim\mathrm{null}(\mathrm{G}) = N_b - N_\ell = \mathrm{rank}(\Omega)$, which is exactly the dimension of $\mathrm{range}(\Omega^T)$.
+The two subspaces therefore coincide,
+\begin{align}
+    \mathrm{null}(\mathrm{G}) = \mathrm{range}(\Omega^T) \, ,
+    \label{eq:nullG_rangeOmegaT}
+\end{align}
+so every homogeneous solution is parametrized by a node-flux vector as $\Phi_b^{(h)} = \Omega^T\Phi$, which on the two branch classes of \cref{eq:branch_split} reads
+\begin{align}\label{eq:homog_sol}
+    \Phi_{b,\rm ind}^{(h)} = \omega_{\rm ind}^T \Phi \, , \qquad
+    \dot\Phi_{b,\rm cap}^{(h)} = \omega_{\rm cap}^T \dot\Phi \, ,
+\end{align}
+with $\omega_{\rm ind}$ and $\omega_{\rm cap}$ the columns of $\Omega$ belonging to each set.
+To find a particular solution, we define a flux-assignment matrix $\mathrm{B} \in \mathbb{R}^{N_b\times N_\ell}$ and make the guess appropriate to each branch class of \cref{eq:branch_split},
+\begin{align}
+    \Phi_{b,\rm ind}^{(p)} = \mathrm{B}_{\rm ind}\Phi_{\rm ext} \, , \qquad
+    \dot\Phi_{b,\rm cap}^{(p)} = \mathrm{B}_{\rm cap}\dot\Phi_{\rm ext} \, .
+    \label{eq:particular_split}
+\end{align}
+Substituting the first into the superconducting block \cref{eq:fluxoid_block} gives $\mathrm{G}_{\rm sc}\mathrm{B}\,\Phi_{\rm ext} = \Phi_{\rm ext, sc}$, which needs no more than $\mathrm{B}_{\rm ind}$ because $\mathrm{G}_{\rm sc}$ has no support on $\mathcal{S}_{\rm cap}$.
+Substituting both into the capacitively broken block \cref{eq:faraday_block} gives $\mathrm{G}_{\rm cb}\mathrm{B}\,\dot\Phi_{\rm ext} = \dot\Phi_{\rm ext, cb}$.
+In the block ordering of \cref{eq:G_blocks} the right-hand sides are $\begin{pmatrix} I_{N_{\rm sc}} & 0\end{pmatrix}\Phi_{\rm ext}$ and $\begin{pmatrix} 0 & I_{N_{\rm cb}}\end{pmatrix}\dot\Phi_{\rm ext}$, so requiring each to hold for an arbitrary argument fixes $\mathrm{G}_{\rm sc}\mathrm{B} \in \mathbb{R}^{N_{\rm sc}\times N_\ell}$ and $\mathrm{G}_{\rm cb}\mathrm{B} \in \mathbb{R}^{N_{\rm cb}\times N_\ell}$ to be exactly those selectors.
+Neither block constrains the other, and since $N_\ell = N_{\rm sc} + N_{\rm cb}$ the two stack into the loop constraint.
+Splitting the columns of $\mathrm{B}$ by loop type as well, $\mathrm{B} = \begin{pmatrix} \mathrm{B}_{\rm sc} & \mathrm{B}_{\rm cb}\end{pmatrix}$, it reads
+\begin{align}
+    \mathrm{G}\mathrm{B} = \begin{pmatrix} \mathrm{G}_{\rm sc}\mathrm{B}_{\rm sc} & \mathrm{G}_{\rm sc}\mathrm{B}_{\rm cb} \\ \mathrm{G}_{\rm cb}\mathrm{B}_{\rm sc} & \mathrm{G}_{\rm cb}\mathrm{B}_{\rm cb} \end{pmatrix}
+    = \begin{pmatrix} I_{N_{\rm sc}} & 0 \\ 0 & I_{N_{\rm cb}} \end{pmatrix} = I_{N_\ell} \, ,
+    \label{eq:GB_constraint}
+\end{align}
+where the two families of subscripts on $\mathrm{B}$ mark different partitions: $\mathrm{B}_{\rm ind}$ and $\mathrm{B}_{\rm cap}$ are blocks of rows selected by branch type, while $\mathrm{B}_{\rm sc}$ and $\mathrm{B}_{\rm cb}$ are blocks of columns selected by loop type.
+Adding the homogeneous solution \cref{eq:homog_sol}, the branch variables are
+\begin{align}
+    \Phi_{b,\rm ind} &= \omega_{\rm ind}^T\Phi + \mathrm{B}_{\rm ind}\Phi_{\rm ext} \, , \label{eq:branch_flux} \\
+    \dot\Phi_{b,\rm cap} &= \omega_{\rm cap}^T\dot\Phi + \mathrm{B}_{\rm cap}\dot\Phi_{\rm ext} \, , \label{eq:branch_flux_cap}
+\end{align}
+\Cref{eq:branch_flux_cap} is the time derivative of the expression \cref{eq:branch_flux} would take on $\mathcal{S}_{\rm cap}$, with the undetermined constant of integration never introduced.
+
+The off-diagonal block of \cref{eq:GB_constraint} is worth naming,
+\begin{align}
+    \mathrm{G}_{\rm sc}\mathrm{B}_{\rm cb} = 0 \, ,
+    \label{eq:Gsc_Bcb_zero}
+\end{align}
+which says that external flux through a capacitively broken loop threads no fluxoid through any superconducting loop.
+Because $\mathrm{G}_{\rm sc}$ has no support on $\mathcal{S}_{\rm cap}$, \cref{eq:Gsc_Bcb_zero} restricts only the $\mathcal{S}_{\rm ind}$ rows of $\mathrm{B}_{\rm cb}$, which are generically non-zero.
+The rows of $\mathrm{G}_{\rm sc}$ span the cycle space of the junction-and-inductor subgraph, so applying the argument of \cref{eq:nullG_rangeOmegaT} to that subgraph makes those entries a node-flux shift.
+A static $\Phi_{\rm ext, cb}$ therefore leaves the Hamiltonian unchanged, as it must since it induces no EMF and drives no current, and the origin left free by \cref{eq:faraday_block} may be fixed arbitrarily.
+
+\subsection{Non-uniqueness of the Flux Assignment Matrix}
+
+The loop constraint \cref{eq:GB_constraint} does not determine $\mathrm{B}$ uniquely.
+Indeed, it is another underdetermined linear system of equations.
+$\mathrm{G}$ has full row rank $N_\ell$ because its rows form a cycle basis, so we can use its right pseudoinverse
+\begin{align}
+    \mathrm{G}^{+} = \mathrm{G}^T\big(\mathrm{G}\mathrm{G}^T\big)^{-1} \, , \qquad \mathrm{G}\mathrm{G}^{+} = I_{N_\ell} \, ,
+    \label{eq:G_right_inverse}
+\end{align}
+to supply a particular solution requiring neither a spanning tree nor any circuit parameters.
+Adding the homogeneous solutions, which by \cref{eq:nullG_rangeOmegaT} are exactly $\mathrm{null}(\mathrm{G}) = \mathrm{range}(\Omega^T)$, gives the complete solution
+\begin{align}
+    \mathrm{B} = \mathrm{G}^{+} + \Omega^T\Lambda \, ,
+    \label{eq:B_gauge}
+\end{align}
+for an arbitrary matrix $\Lambda \in \mathbb{R}^{N_v\times N_\ell}$.
+Every choice of $\Lambda$ in \cref{eq:B_gauge} yields a valid flux assignment.
+The consequences of that choice are taken up in \cref{apx:tdflux}.
+
+A second freedom precedes this one, in the cycle basis itself.
+\Cref{eq:G_OmegaT} fixes only the row space of $\mathrm{G}$, so $\mathrm{G} \to S\mathrm{G}$ is an equally valid loop matrix for any $S \in \mathrm{GL}(N_\ell,\mathbb{R})$.
+Both the fluxoid condition and the loop constraint then carry $S$ along,
+\begin{align}
+    \mathrm{G} \to S\mathrm{G} \, , \qquad
+    \Phi_{\rm ext} \to S\,\Phi_{\rm ext} \, , \qquad
+    \mathrm{B} \to \mathrm{B}S^{-1} \, ,
+    \label{eq:G_basis_change}
+\end{align}
+since $S\mathrm{G}\mathrm{B}S^{-1} = I_{N_\ell}$ and $S\mathrm{G}\Phi_b = S\Phi_{\rm ext}$, and the irrotational condition of \cref{apx:tdflux} is linear in $\mathrm{B}$ and so survives unchanged.
+The branch offsets $\mathrm{B}\Phi_{\rm ext}$ are therefore invariant, and with them the Hamiltonian.
+Unlike the $\Lambda$ freedom of \cref{eq:B_gauge}, this one changes nothing physical at all: an unrecognisable $\mathrm{B}$ obtained from a machine-generated nullspace basis is the same assignment written against different loop coordinates.
+
+What the choice does change is the meaning of the components of $\Phi_{\rm ext}$.
+A component may be set to zero only when its row is a physical loop known to enclose no flux, so that entry is a statement about the layout and not a convention; \cref{apx:harmonium} works an example where two candidate cycles differ by a flux-threaded loop and only one of them may be zeroed.
+Two of our conventions already narrow the group.
+Requiring $\mathrm{G} \in \{0,\pm1\}^{N_\ell\times N_b}$ excludes generic real $S$, and requiring the rows of $\mathrm{G}_{\rm sc}$ to span the cycle space of the $\mathcal{S}_{\rm ind}$ subgraph forces $S$ to be block lower triangular in the ordering of \cref{eq:G_blocks}: a superconducting row that absorbed a capacitively broken one would acquire support on $\mathcal{S}_{\rm cap}$, while the reverse is harmless.
+Within what remains one may aim for the simplest physical decomposition, with each row an easily identified loop, or for the basis in which $\mathrm{B}$ and the resulting Hamiltonian come out simplest.
+The two need not coincide, and neither is more correct than the other.
+
+
+\begin{figure}[t]
+\centering
+\resizebox{\linewidth}{!}{\IfFileExists{figs/coupled_transmon_fluxonium.tex}{\input{figs/coupled_transmon_fluxonium}}{\input{Notes/figs/coupled_transmon_fluxonium}}}
+\caption{Circuit schematic of a grounded tunable transmon (left) capacitively coupled via $C_c$ to a grounded fluxonium (right), driven by $N_{\rm src} = 3$ classical voltage sources through four gate coupling capacitors.
+The circuit graph has seven labeled nodes: three internal nodes ($1, 2, 3$), one ground reference node ($4$), and three fixed-voltage source nodes ($5, 6, 7$).
+The circuit contains $N_b = 15$ total branches ($N_C = 8, N_J = 3, N_L = 1, N_{\rm src} = 3$), where each boxed junction branch $k \in \mathcal{S}_J$ possesses co-located Josephson energy and intrinsic capacitance $(E_{J_k}, C_{J_k})$.
+The transmon sits on the floating island $\Phi_3$ rather than directly on ground, reaching ground only through $C_g$, which leaves its common mode free of both junctions and inductors.
+There are two flux-threaded inductive loops ($\Phi_{\rm ext,1}, \Phi_{\rm ext,2}$) and seven capacitively interrupted loops ($\dot\Phi_{{\rm ext}, 1}, \dots, \dot\Phi_{{\rm ext}, 7}$), for a total of $N_\ell = N_b - \mathrm{rank}(\Omega) = 15 - 6 = 9$.
+The two families are numbered separately and distinguished by the dot; in the stacked $\Phi_{\rm ext}$ of \cref{eq:G_blocks} the capacitively interrupted loops are components $3$ through $9$.
+The last of these, $\dot\Phi_{{\rm ext}, 7}$, runs $C_{V,1} \to V_1 \to$ ground $\to C_g \to C_t$ and so closes through a source branch; loops of this type are easily missed, but one is required to complete the cycle basis.
+All branch orientations given in \cref{eq:example_omega_sub} follow the convention of directing edges from lower-indexed to higher-indexed nodes.}
+\label{fig:coupled_circuit_example}
+\end{figure}
+
+\section{Constructing the Circuit Lagrangian}\label{apx:full_eq}

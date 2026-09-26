@@ -1,0 +1,59 @@
+Notebook[{
+Cell["0-pi qubit: variable transformation and irrotational flux assignment", "Title"],
+Cell["Companion to Appendix B.2 of full_matrix_quantization.tex. Nodes 1-4 are the ring; node 5 is the isolated ground of a floating circuit. Branch order (J1, J2, L1, L2, C1, C2).", "Text"],
+Cell["General functions", "Section"],
+Cell["ClearAll[CircuitIncidenceMatrix, IrrotationalAssignment];
+CircuitIncidenceMatrix[edges_List, nodes_List] := Table[
+   Boole[nodes[[i]] === edges[[j, 1]]] - Boole[nodes[[i]] === edges[[j, 2]]],
+   {i, Length[nodes]}, {j, Length[edges]}];
+IrrotationalAssignment[g_, oi_, cb_, z_] := Module[{ct, gp, p},
+   ct = Transpose[z] . oi . cb . Transpose[oi] . z;
+   gp = Transpose[g] . Inverse[g . Transpose[g]];
+   p = Transpose[oi] . z . Inverse[ct] . Transpose[z] . oi . cb;
+   Simplify[(IdentityMatrix[Length[cb]] - p) . gp]];", "Input"],
+Cell["1. Circuit topology and incidence matrices", "Section"],
+Cell["nodes = Range[1, 5];
+edges = {{1, 2}, {3, 4}, {2, 3}, {4, 1}, {1, 3}, {2, 4}};
+Om = CircuitIncidenceMatrix[edges, nodes];
+Oi = Om[[1 ;; 4, All]];
+{MatrixRank[Om], Length[edges] - MatrixRank[Om]}
+Om // MatrixForm", "Input"],
+Cell["2. Symbolic element matrices", "Section"],
+Cell["Cb = DiagonalMatrix[{CJ, CJ, 0, 0, Cc, Cc}];
+LbInv = DiagonalMatrix[{1/Lk, 1/Lk}];
+wJ = Oi[[All, {1, 2}]]; wL = Oi[[All, {3, 4}]];
+Cint = Simplify[Oi . Cb . Transpose[Oi]];
+Lint = Simplify[wL . LbInv . Transpose[wL]];
+Cint // MatrixForm
+Lint // MatrixForm
+NullSpace[Cint]", "Input"],
+Cell["3. Published normal-mode coordinates (phi, theta, zeta, Sigma)", "Section"],
+Cell["Zfull = Inverse[(1/2) {{-1, 1, -1, 1}, {-1, 1, 1, -1}, {1, 1, -1, -1}, {1, 1, 1, 1}}];
+Ctfull = Simplify[Transpose[Zfull] . Cint . Zfull];
+Ltfull = Simplify[Transpose[Zfull] . Lint . Zfull];
+Jtfull = Simplify[Transpose[wJ] . Zfull];
+Ctfull // MatrixForm
+Ltfull // MatrixForm
+Jtfull // MatrixForm", "Input"],
+Cell["Sigma is cyclic (zero row and column of both forms), so truncate it.", "Text"],
+Cell["Z = Zfull[[All, 1 ;; 3]];
+Ct = Simplify[Transpose[Z] . Cint . Z];
+Ct // MatrixForm", "Input"],
+Cell["4. Loop and irrotational constraints", "Section"],
+Cell["G = {{1, 1, 1, 1, 0, 0}, {1, 0, 1, 0, -1, 0}, {0, 1, 1, 0, 0, -1}};
+Simplify[G . Transpose[Om]]
+B = IrrotationalAssignment[G, Oi, Cb, Z];
+B // MatrixForm
+Simplify[G . B]
+Simplify[Transpose[Z] . Oi . Cb . B]", "Input"],
+Cell["5. Flux dependence", "Section"],
+Cell["fe = {Fext, 0, 0};
+branch = Simplify[Transpose[Oi] . Z . {ph, th, ze} + B . fe];
+jPhases = branch[[{1, 2}]]
+lPhases = branch[[{3, 4}]]
+Uj = -EJ Total[Cos /@ jPhases];
+Ul = Simplify[(lPhases . LbInv . lPhases)/2];
+Simplify[Uj]
+Simplify[Ul]", "Input"],
+Cell["The junction pair collapses to -2 EJ Cos[ph] Cos[th]; the flux sits entirely on L2. The published form follows from ph -> ph - Fext/2, ze -> ze + Fext/2.", "Text"]
+}]

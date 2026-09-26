@@ -1,0 +1,57 @@
+Notebook[{
+Cell["Asymmetric (soft) rhombus: variable transformation and irrotational flux assignment", "Title"],
+Cell["Companion to Appendix B.4 of full_matrix_quantization.tex, following arXiv:2605.06430. Ring nodes 1-4, ground node 5. Branch order (J1, J2, J3, J4, CB, Cg1, Cg2, Cg3, Cg4), where CB is the large shunt across the opposite islands 1 and 3. Junction 4 is weakened: EJ4 = al EJ, CJ4 = al CJ.", "Text"],
+Cell["General functions", "Section"],
+Cell["ClearAll[CircuitIncidenceMatrix, IrrotationalAssignmentPinv];
+CircuitIncidenceMatrix[edges_List, nodes_List] := Table[
+   Boole[nodes[[i]] === edges[[j, 1]]] - Boole[nodes[[i]] === edges[[j, 2]]],
+   {i, Length[nodes]}, {j, Length[edges]}];
+(* K is not square here, so use the right pseudoinverse of the stacked system *)
+IrrotationalAssignmentPinv[g_, oi_, cb_, z_] := Module[{k, rhs},
+   k = Join[g, Transpose[z] . oi . cb];
+   rhs = Join[IdentityMatrix[Length[g]], ConstantArray[0, {Last[Dimensions[z]], Length[g]}]];
+   Simplify[Transpose[k] . Inverse[k . Transpose[k]] . rhs]];", "Input"],
+Cell["1. Circuit topology and incidence matrices", "Section"],
+Cell["nodes = Range[1, 5];
+edges = {{1,2},{2,3},{3,4},{4,1},{1,3},{1,5},{2,5},{3,5},{4,5}};
+Om = CircuitIncidenceMatrix[edges, nodes];
+Oi = Om[[1 ;; 4, All]];
+wJ = Oi[[All, 1 ;; 4]];
+{MatrixRank[Om], Length[edges] - MatrixRank[Om]}
+Om // MatrixForm", "Input"],
+Cell["2. Symbolic element matrices (no inductors: L* = 0, so S_0 is empty)", "Section"],
+Cell["Cb = DiagonalMatrix[{CJ, CJ, CJ, al CJ, CB, Cg, Cg, Cg, Cg}];
+Cint = Simplify[Oi . Cb . Transpose[Oi]];
+Cint // MatrixForm
+Factor[Det[Cint]]
+NullSpace[Cint]
+{Simplify[Cint . {1,1,1,1}], Simplify[Transpose[wJ] . {1,1,1,1}]}", "Input"],
+Cell["The centroid is annihilated by the junctions but not by C_int: a free mode.", "Text"],
+Cell["3. Paper coordinates: three branch phases and the varsigma-weighted centroid", "Section"],
+Cell["vs = {Cg, Cg, Cg, Cg}/(4 Cg);
+Zfull = Inverse[{{-1,1,0,0},{0,-1,1,0},{0,0,-1,1}, vs}];
+Ctfull = Simplify[Transpose[Zfull] . Cint . Zfull];
+Ctfull // MatrixForm", "Input"],
+Cell["The weights decouple the free mode exactly, so M_C = 0. Check with unequal ground capacitances:", "Text"],
+Cell["CbA = DiagonalMatrix[{CJ, CJ, CJ, al CJ, CB, g1, g2, g3, g4}];
+CintA = Simplify[Oi . CbA . Transpose[Oi]];
+vsA = {g1, g2, g3, g4}/(g1 + g2 + g3 + g4);
+ZfA = Inverse[{{-1,1,0,0},{0,-1,1,0},{0,0,-1,1}, vsA}];
+Simplify[(Transpose[ZfA] . CintA . ZfA)[[4, All]]]", "Input"],
+Cell["4. Truncate the free mode and transform", "Section"],
+Cell["Z = Zfull[[All, 1 ;; 3]];
+Ct = Simplify[Transpose[Z] . Cint . Z];
+Ct // MatrixForm
+Simplify[Transpose[wJ] . Z] // MatrixForm", "Input"],
+Cell["5. Loops and the irrotational flux assignment", "Section"],
+Cell["G = {{1,1,1,1,0,0,0,0,0},{-1,-1,0,0,1,0,0,0,0},{-1,0,0,0,0,1,-1,0,0},{0,-1,0,0,0,0,1,-1,0},{0,0,-1,0,0,0,0,1,-1}};
+Simplify[G . Transpose[Om]]
+K = Join[G, Transpose[Z] . Oi . Cb];
+{Dimensions[K], MatrixRank[K]}
+B = IrrotationalAssignmentPinv[G, Oi, Cb, Z];
+Simplify[G . B]
+Simplify[Transpose[Z] . Oi . Cb . B]
+Factor[Simplify[B[[All, 1]]]]
+cshare = Simplify[Limit[B[[1 ;; 4, 1]], Cg -> 0]]\nSimplify[Total[cshare]]\nSimplify[Limit[cshare, CB -> 0]]\nSimplify[Limit[cshare, CB -> Infinity]]", "Input"],
+Cell["The flux column is a capacitive divider over all four junctions. At Cg -> 0 the shares sum to one; CB -> 0 gives al/(1+3al) three times with 1/(1+3al), and CB -> Infinity gives {0, 0, al/(1+al), 1/(1+al)}, the two-junction divider for J3 and J4.", "Text"]
+}]
