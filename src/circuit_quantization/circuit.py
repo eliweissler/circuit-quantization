@@ -116,3 +116,113 @@ def incidence(circuit):
         Omega[row[b.tail], k] = 1
         Omega[row[b.head], k] = -1
     return sym.ImmutableMatrix(Omega)
+
+
+def _graph(circuit):
+    graph = nx.MultiGraph()
+    graph.add_nodes_from(circuit.nodes)
+    graph.add_edges_from((b.tail, b.head) for b in circuit.branches)
+    return graph
+
+
+def default_tree(circuit):
+    """A spanning forest grown over S_ind (J, L) first, then S_cap (C, V).
+
+    Growing S_ind first makes the closure rows inside S_ind span that
+    subgraph's cycle space, so G comes out ordered as in eq:G_blocks.
+    """
+    forest = nx.utils.UnionFind(circuit.nodes)
+    tree = []
+    for b in sorted(circuit.branches, key=lambda b: b.type not in ("J", "L")):
+        if forest[b.tail] != forest[b.head]:
+            forest.union(b.tail, b.head)
+            tree.append(b.name)
+    return tree
+
+
+def fundamental_cycles(circuit, tree=None):
+    """Fundamental cycles of a spanning tree, as signed branch dicts (Appendix A).
+
+    Returns {closure branch name: {branch name: +1 or -1}}, superconducting
+    cycles first (eq:G_blocks).
+    """
+    names = circuit.branch_names
+    tree = default_tree(circuit) if tree is None else list(tree)
+    if set(tree) - set(names):
+        raise ValueError(f"Unknown tree branches: {sorted(set(tree) - set(names))}")
+    # Delete one root row per connected component, the ground in its own.
+    roots = set()
+    for component in nx.connected_components(_graph(circuit)):
+        roots.add(circuit.ground if circuit.ground in component
+                  else next(n for n in circuit.nodes if n in component))
+    keep = [i for i, n in enumerate(circuit.nodes) if n not in roots]
+    tree_cols = [names.index(name) for name in tree]
+    closure_cols = sorted(
+        (k for k in range(len(names)) if names[k] not in tree),
+        key=lambda k: circuit.branches[k].type not in ("J", "L"),
+    )
+    Omega = incidence(circuit)
+    Omega_t = Omega.extract(keep, tree_cols)
+    Omega_c = Omega.extract(keep, closure_cols)
+    if Omega_t.rows != Omega_t.cols or Omega_t.det() == 0:
+        raise ValueError("tree is not a spanning forest of the circuit")
+    G_t = -Omega_c.T * Omega_t.T.inv()  # eq:tree_B, Appendix A
+    cycles = {}
+    for row, k in enumerate(closure_cols):
+        cycle = {names[j]: int(G_t[row, col]) for col, j in enumerate(tree_cols) if G_t[row, col] != 0}
+        cycle[names[k]] = 1
+        cycles[names[k]] = cycle
+    return cycles
+
+
+class Loops:
+    """A complete cycle basis G and the external flux through each cycle (Sec I.C).
+
+    Every cycle not given a value in ``fluxes`` gets a visible symbol Phi_<name> [Wb].
+    Pass 0 explicitly for a cycle that encloses no flux.
+    """
+
+    def __init__(self, circuit, cycles, fluxes=None):
+        fluxes = dict(fluxes or {})
+        names = circuit.branch_names
+        if set(fluxes) - set(cycles):
+            raise ValueError(f"Fluxes for unknown cycles: {sorted(set(fluxes) - set(cycles))}")
+        rows = []
+        for loop, cycle in cycles.items():
+            if set(cycle) - set(names):
+                raise ValueError(f"Cycle {loop!r} uses unknown branches: {sorted(set(cycle) - set(names))}")
+            rows.append([cycle.get(name, 0) for name in names])
+        G = sym.Matrix(rows) if rows else sym.zeros(0, len(names))
+        Omega = incidence(circuit)
+        for loop, row in zip(cycles, rows):
+            if any(sym.Matrix([row]) * Omega.T):
+                raise ValueError(f"Cycle {loop!r} is not a graph cycle (eq:G_OmegaT)")
+        if G.rank() < G.rows:
+            raise ValueError("Cycles are linearly dependent")
+        N_ell = len(names) - Omega.rank()
+        if G.rows < N_ell:
+            raise ValueError(f"{N_ell - G.rows} cycle(s) missing: a complete basis has {N_ell}")
+        self.circuit = circuit
+        self.names = tuple(cycles)
+        self.G = sym.ImmutableMatrix(G)
+        self.Phi_ext = sym.ImmutableMatrix(
+            len(self.names), 1,
+            [fluxes.get(loop, sym.Symbol(f"Phi_{loop}", real=True)) for loop in self.names],
+        )
+
+    def rebase(self, G_new, names=None):
+        """Re-express the same fluxes in another cycle basis G_new = T G (eq:G_basis_change)."""
+        G_new = sym.Matrix(G_new)
+        G = sym.Matrix(self.G)
+        T = G_new * G.T * (G * G.T).inv()
+        if T * G != G_new:
+            raise ValueError("G_new rows are not in the cycle space")
+        if any(not x.is_integer for x in T) or abs(T.det()) != 1:
+            raise ValueError("G_new = T G needs T integer with det T = +-1")
+        names = names or tuple(f"loop_{i + 1}" for i in range(G_new.rows))
+        branch_names = self.circuit.branch_names
+        cycles = {
+            loop: {branch_names[k]: int(G_new[i, k]) for k in range(G_new.cols) if G_new[i, k] != 0}
+            for i, loop in enumerate(names)
+        }
+        return Loops(self.circuit, cycles, dict(zip(names, T * self.Phi_ext)))
