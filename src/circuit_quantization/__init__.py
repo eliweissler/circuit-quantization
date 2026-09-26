@@ -1,6 +1,7 @@
 """Symbolic quantization of superconducting circuits (rebuild in progress)."""
 
 from .circuit import Branch, Circuit, Loops, fundamental_cycles, incidence
+from .flux import irrotational_B
 from .lagrangian import lagrangian
 from .modes import check_basis, decouple, mode_basis, residual_freedom, transform
 from .units import (
