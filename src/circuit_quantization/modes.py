@@ -139,3 +139,64 @@ def check_basis(lag, Z_full, types):
         minors = [sym.simplify(W.extract(list(rows), list(range(W.cols))).det()) for rows in combinations(range(W.rows), W.cols)]
         if reduce(gcd, (int(m) for m in minors), 0) != 1:
             raise ValueError("Compact periods are not primitive (eq:compact_period_lattice)")
+
+
+# --- decoupling and truncation ----------------------------------------------
+
+
+def _orthogonalize(vectors, form):
+    """Gram-Schmidt in the bilinear form, so each step divides by a positive scalar."""
+    result = []
+    for v in vectors:
+        for u in result:
+            v = v - (u.T * form * v)[0] / (u.T * form * u)[0] * u
+        result.append(v.applyfunc(sym.cancel))
+    return result
+
+
+def coordinates(lag, Z, types):
+    """Transformed objects of the retained block Z (eq:Zd_schur)."""
+    Z = sym.Matrix(Z)
+    C_tilde = (Z.T * lag.C_int * Z).applyfunc(sym.cancel)
+    if sym.cancel(C_tilde.det()) == 0:
+        raise ValueError("Retained capacitance matrix is singular")
+    freeze = sym.ImmutableMatrix
+    return Coordinates(
+        Z=freeze(Z), types=tuple(types), C_tilde=freeze(C_tilde),
+        C_tilde_inv=freeze(C_tilde.inv().applyfunc(sym.cancel)),
+        Lstar_tilde=freeze((Z.T * lag.Lstar_int * Z).applyfunc(sym.cancel)),
+        omega_J_tilde=freeze(Z.T * lag.omega_J_int),
+        omega_L_tilde=freeze(Z.T * lag.omega_L_int),
+    )
+
+
+def decouple(lag, Z_full, types):
+    """Retained block Z_1 + Z_2 M of eq:ZY_blocks, then truncation (Sec III.B).
+
+    M_C = -C~_22^{-1} C~_21 (eq:decouple_final) acts on the free block and
+    M_L = -L~*_22^{-1} L~*_21 (eq:decouple_final_L) on the frozen block.
+    Each block is first orthogonalized in its own form, which makes C~_22 and
+    L~*_22 diagonal, so M is applied one column and one mode at a time.
+    """
+    Z = sym.Matrix(Z_full)
+    columns = [Z[:, j] for j in range(Z.cols)]
+    free = _orthogonalize([z for z, t in zip(columns, types) if t == "fr"], lag.C_int)
+    frozen = _orthogonalize([z for z, t in zip(columns, types) if t == "fz"], lag.Lstar_int)
+    retained, retained_types = [], []
+    for z, t in zip(columns, types):
+        if t not in DYNAMICAL:
+            continue
+        for v in free:
+            z = z - (v.T * lag.C_int * z)[0] / (v.T * lag.C_int * v)[0] * v
+        for w in frozen:
+            z = z - (w.T * lag.Lstar_int * z)[0] / (w.T * lag.Lstar_int * w)[0] * w
+        retained.append(z.applyfunc(sym.cancel))
+        retained_types.append(t)
+    if not retained:
+        raise ValueError("Circuit has no dynamical modes")
+    Z_1 = sym.Matrix.hstack(*retained)
+    Z_2 = _columns([z for z, t in zip(columns, types) if t in NONDYNAMICAL], Z.rows)
+    for name, form in (("capacitance", lag.C_int), ("susceptance", lag.Lstar_int)):
+        if (Z_1.T * form * Z_2).applyfunc(sym.cancel) != sym.zeros(Z_1.cols, Z_2.cols):
+            raise AssertionError(f"Nonzero {name} cross block after decoupling (eq:ZY_blocks)")
+    return coordinates(lag, Z_1, retained_types)
