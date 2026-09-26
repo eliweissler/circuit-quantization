@@ -2,6 +2,7 @@
 
 from .circuit import Branch, Circuit, Loops, fundamental_cycles, incidence
 from .lagrangian import lagrangian
+from .modes import check_basis, mode_basis
 from .units import (
     farad_to_ghz,
     ghz_to_farad,
