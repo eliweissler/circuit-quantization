@@ -1,63 +1,41 @@
-"""Canonical physical constants and unit conversions.
+"""Physical constants and unit conversions (Sec VI).
 
-Circuit inputs use farads, henrys, volts, webers, and seconds.  Element
-energies and Hamiltonians use ordinary frequency units (GHz), i.e. E/h rather
-than angular frequency E/hbar.
+Circuit inputs are SI (F, H, V, Wb, s).
+Energies and the Hamiltonian are ordinary frequencies E/h in GHz.
 """
 
-from __future__ import annotations
+import sympy as sym
 
-from sympy import Integer, Rational, pi
-
-ELEMENTARY_CHARGE = Rational("1.602176634e-19")
-PLANCK_CONSTANT = Rational("6.62607015e-34")
-HBAR = PLANCK_CONSTANT / (2 * pi)
-REDUCED_FLUX_QUANTUM = HBAR / (2 * ELEMENTARY_CHARGE)
-FLUX_QUANTUM = PLANCK_CONSTANT / (2 * ELEMENTARY_CHARGE)
-GHZ = Integer(10) ** 9
+e = sym.Rational("1.602176634e-19")  # elementary charge [C]
+h = sym.Rational("6.62607015e-34")  # Planck constant [J s]
+hbar = h / (2 * sym.pi)
+Phi0 = h / (2 * e)  # flux quantum [Wb]
+phi0 = hbar / (2 * e)  # reduced flux quantum [Wb], eq:dimless_defs
+GHz = sym.Integer(10) ** 9
 
 
-def farad_to_ghz(capacitance):
-    """Convert capacitance in farads to charging energy E_C/h in GHz."""
-    return ELEMENTARY_CHARGE**2 / (2 * PLANCK_CONSTANT * capacitance * GHZ)
+# eq:EC_EL_scalar: h E_C = e^2 / 2C
+def farad_to_ghz(C):
+    return e**2 / (2 * h * C * GHz)
 
 
-def ghz_to_farad(charging_energy):
-    """Convert charging energy E_C/h in GHz to capacitance in farads."""
-    return ELEMENTARY_CHARGE**2 / (2 * PLANCK_CONSTANT * charging_energy * GHZ)
+def ghz_to_farad(E_C):
+    return e**2 / (2 * h * E_C * GHz)
 
 
-def henry_to_ghz(inductance):
-    """Convert inductance in henrys to inductive energy E_L/h in GHz."""
-    return REDUCED_FLUX_QUANTUM**2 / (PLANCK_CONSTANT * inductance * GHZ)
+# eq:EC_EL_scalar: h E_L = phi0^2 / L
+def henry_to_ghz(L):
+    return phi0**2 / (h * L * GHz)
 
 
-def ghz_to_henry(inductive_energy):
-    """Convert inductive energy E_L/h in GHz to inductance in henrys."""
-    return REDUCED_FLUX_QUANTUM**2 / (
-        PLANCK_CONSTANT * inductive_energy * GHZ
-    )
+def ghz_to_henry(E_L):
+    return phi0**2 / (h * E_L * GHz)
 
 
-def joule_to_ghz(energy):
-    return energy / (PLANCK_CONSTANT * GHZ)
+# eq:dimless_defs: varphi = Phi / phi0
+def weber_to_phase(Phi):
+    return Phi / phi0
 
 
-def ghz_to_joule(frequency):
-    return frequency * PLANCK_CONSTANT * GHZ
-
-
-def weber_to_phase(flux):
-    return flux / REDUCED_FLUX_QUANTUM
-
-
-def phase_to_weber(phase):
-    return phase * REDUCED_FLUX_QUANTUM
-
-
-def coulomb_to_cooper_pairs(charge):
-    return charge / (2 * ELEMENTARY_CHARGE)
-
-
-def cooper_pairs_to_coulomb(number):
-    return number * (2 * ELEMENTARY_CHARGE)
+def phase_to_weber(varphi):
+    return varphi * phi0
