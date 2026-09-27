@@ -38,7 +38,7 @@ def test_automatic_kite_basis_separates_the_harmonic_direction():
 
 
 @pytest.mark.parametrize("types, message", [
-    (("e", "e", "e", "e"), "1 'c' modes"),
+    (("e", "e", "e", "e"), "not a valid 'e'"),  # the compact column lies in N(L*)
     (("h", "e", "e", "e"), "not a valid 'h'"),
 ])
 def test_check_basis_rejects_wrong_types(types, message):
@@ -209,3 +209,13 @@ def test_transform_rejects_disallowed_mixing(S, message):
     coords = decouple(lag, *mode_basis(lag))
     with pytest.raises(ValueError, match=message):
         transform(coords, S)
+
+
+def test_check_basis_rejects_harmonic_direction_labelled_extended():
+    lag = lagrangian(kite())
+    Z, _ = mode_basis(lag)  # third column is the harmonic direction
+    with pytest.raises(ValueError, match="not a valid 'e'"):
+        check_basis(lag, Z, ("c", "e", "e"))
+    lc = Circuit([Branch("C", 1, 0, C=1), Branch("L", 1, 0, L=1)], ground=0)
+    with pytest.raises(ValueError, match="not a valid 'e'"):
+        check_basis(lagrangian(lc), sym.eye(1), ("e",))

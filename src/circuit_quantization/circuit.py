@@ -16,6 +16,8 @@ class Branch:
     C [F] is an attribute any branch may carry.
     At most one of L [H], EJ [GHz], or V [V] makes it an inductor, junction, or source.
     V is the source node's potential relative to ground.
+    Floats are converted to exact rationals, so identities the notes prove
+    (G B = I, vanishing cross blocks) hold exactly.
     """
 
     name: str
@@ -30,7 +32,7 @@ class Branch:
         for attr in ("C", "L", "EJ", "V"):
             value = getattr(self, attr)
             if value is not None:
-                object.__setattr__(self, attr, sym.sympify(value))
+                object.__setattr__(self, attr, sym.nsimplify(sym.sympify(value), rational=True))
         if self.tail == self.head:
             raise ValueError(f"Branch {self.name!r} is a self-loop")
         if sum(x is not None for x in (self.L, self.EJ, self.V)) > 1:

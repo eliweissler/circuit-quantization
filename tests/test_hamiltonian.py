@@ -98,3 +98,16 @@ def test_lc_oscillator_is_harmonic():
     res = quantize(circuit, Loops(circuit, cycles, {name: 0 for name in cycles}))
     assert res.coords.types == ("h",)
     assert sym.nsimplify(res.E_L[0, 0]) == sym.Rational(1, 2)
+
+
+def test_float_parameters_in_circuits_with_loops_and_free_modes():
+    # Floats are rationalized at input, so exact-zero checks hold (Review Focus 1).
+    squid = Circuit([Branch("J1", 1, 0, C=41.7e-15, EJ=12.3), Branch("J2", 1, 0, C=13.1e-15, EJ=7.7),
+                     Branch("Cs", 1, 0, C=73.3e-15)], ground=0)
+    res = quantize(squid, Loops(squid, cq.fundamental_cycles(squid)))
+    assert abs(float(res.E_C[0, 0]) - float(cq.farad_to_ghz(128.1e-15))) < 1e-9
+    floating = Circuit([Branch("J", 1, 2, C=5e-15, EJ=10.0), Branch("C1", 1, 0, C=30e-15),
+                        Branch("C2", 2, 0, C=40e-15)], ground=0)
+    cycles = cq.fundamental_cycles(floating)
+    res = quantize(floating, Loops(floating, cycles, {name: 0 for name in cycles}))
+    assert res.coords.types == ("c",)

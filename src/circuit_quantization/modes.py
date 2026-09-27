@@ -125,8 +125,11 @@ def check_basis(lag, Z_full, types):
         raise ValueError("Z_full is singular")
     sub = subspaces(lag)
     required = {"c": "L", "h": "J", "fr": "JL", "fz": "C", "cy": "cy"}
+    excluded = {"e": ("J", "L"), "h": ("L",)}  # extended sees both terms, harmonic the quadratic one
     for j, t in enumerate(types):
-        if t in required and not _contains(sub[required[t]], Z[:, j]):
+        inside = t in required and not _contains(sub[required[t]], Z[:, j])
+        outside = any(_contains(sub[s], Z[:, j]) for s in excluded.get(t, ()))
+        if inside or outside:
             raise ValueError(f"Column {j} is not a valid {t!r} direction (tab:var_basis)")
     for t in ("c",) + NONDYNAMICAL:
         if types.count(t) != sub[t].cols:

@@ -1,9 +1,11 @@
 import sympy as sym
 
-from circuit_quantization import Branch, Loops, decouple, irrotational_B, lagrangian, mode_basis
+from circuit_quantization import (
+    Branch, Loops, decouple, fundamental_cycles, irrotational_B, lagrangian, mode_basis,
+)
 from circuits import (
     HARMONIUM_CYCLES, HARMONIUM_Z, KITE_CYCLES, KITE_Z, RHOMBUS_CYCLES, RHOMBUS_Z,
-    ZERO_PI_CYCLES, ZERO_PI_Z, harmonium, kite, parallel, pos, rhombus, zero_pi,
+    ZERO_PI_CYCLES, ZERO_PI_Z, coupled, harmonium, kite, parallel, pos, rhombus, zero_pi,
 )
 
 
@@ -105,3 +107,20 @@ def test_branch_offsets_invariant_under_rebase():
     before = assign(circuit, loops, HARMONIUM_Z, ("c", "e", "e", "e")) * loops.Phi_ext
     after = assign(circuit, rebased, HARMONIUM_Z, ("c", "e", "e", "e")) * rebased.Phi_ext
     assert (before - after).applyfunc(sym.simplify).is_zero_matrix
+
+
+def test_coupled_example_assignment_is_fast():
+    # fig:coupled_circuit_example: 15 branches, 9 loops, all-symbolic capacitances.
+    import signal
+
+    def timeout(*_):
+        raise TimeoutError("irrotational_B took longer than 60 s")
+
+    signal.signal(signal.SIGALRM, timeout)
+    signal.alarm(60)
+    try:
+        circuit = coupled()
+        B = assign(circuit, Loops(circuit, fundamental_cycles(circuit)))
+    finally:
+        signal.alarm(0)
+    assert B.shape == (15, 9)
