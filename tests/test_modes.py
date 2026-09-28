@@ -2,7 +2,8 @@ import pytest
 import sympy as sym
 
 from circuit_quantization import (
-    Branch, Circuit, check_basis, decouple, infer_types, lagrangian, mode_basis, mode_dimensions,
+    Branch, Circuit, check_basis, check_coordinates, decouple, infer_types, lagrangian, mode_basis,
+    mode_dimensions,
     residual_freedom, transform,
 )
 from circuit_quantization.modes import subspaces
@@ -10,6 +11,14 @@ from circuits import (
     COUPLED_ZERO_PI_TYPES, COUPLED_ZERO_PI_Z, HARMONIUM_Z, RHOMBUS_Z, ZERO_PI_Z,
     coupled, coupled_zero_pis, harmonium, kite, pos, rhombus, zero_pi,
 )
+
+
+def validate(lag, Z, types):
+    """The checks quantize runs: check_basis, decouple, check_coordinates."""
+    check_basis(lag, Z, types)
+    coords = decouple(lag, Z, types)
+    check_coordinates(lag, coords)
+    return coords
 
 
 def zero(M):
@@ -32,7 +41,7 @@ def test_automatic_kite_basis_separates_the_harmonic_direction():
     lag = lagrangian(kite())
     Z, types = mode_basis(lag)
     assert types == ("c", "e", "h")
-    check_basis(lag, Z, types)
+    validate(lag, Z, types)
     omega = lag.omega_J_int.T * Z
     assert omega[:, 0] == sym.Matrix([1, 1])  # compact period Phi0 (eq:Scc_selection)
     assert omega[:, 2] == sym.zeros(2, 1)  # harmonic column sees no junction
@@ -44,14 +53,14 @@ def test_automatic_kite_basis_separates_the_harmonic_direction():
 ])
 def test_check_basis_rejects_wrong_types(types, message):
     with pytest.raises(ValueError, match=message):
-        check_basis(lagrangian(harmonium()), HARMONIUM_Z, types)
+        validate(lagrangian(harmonium()), HARMONIUM_Z, types)
 
 
 def test_check_basis_rejects_non_primitive_compact_lattice():
     Z = HARMONIUM_Z.copy()
     Z[:, 0] = Z[:, 0] / 2
     with pytest.raises(ValueError, match="integer|primitive"):
-        check_basis(lagrangian(harmonium()), Z, ("c", "e", "e", "e"))
+        validate(lagrangian(harmonium()), Z, ("c", "e", "e", "e"))
 
 
 def test_coupled_example_given_Z_reproduces_schur_complement():
@@ -60,7 +69,7 @@ def test_coupled_example_given_Z_reproduces_schur_complement():
     CT, C1, C2 = Ct + CJ1 + CJ2, Cc + CV1 + CV2, Cc + Cf + CJ3 + CV3 + CV4
     lag = lagrangian(coupled())
     Z = sym.Matrix([[1, 0, 1], [0, 1, 0], [0, 0, 1]])  # eq:fig1_Z
-    check_basis(lag, Z, ("c", "e", "fr"))
+    validate(lag, Z, ("c", "e", "fr"))
     coords = decouple(lag, Z, ("c", "e", "fr"))
     expected = sym.Matrix([  # eq:fig1_schur
         [CT + C1 * Cg / (C1 + Cg), -Cc * Cg / (C1 + Cg)],
@@ -82,7 +91,7 @@ def test_zero_pi_given_Z_matches_notes():
     CJ, C, L = pos("C_J C L")
     lag = lagrangian(zero_pi())
     types = ("e", "c", "h", "cy")
-    check_basis(lag, ZERO_PI_Z, types)
+    validate(lag, ZERO_PI_Z, types)
     coords = decouple(lag, ZERO_PI_Z, types)
     assert coords.C_tilde == sym.diag(2 * CJ, 2 * (C + CJ), 2 * C)  # eq:zp_transformed
     assert coords.Lstar_tilde == sym.diag(2 / L, 0, 2 / L)
@@ -91,7 +100,7 @@ def test_zero_pi_given_Z_matches_notes():
 
 def test_harmonium_given_Z_promotes_harmonic_to_extended():
     lag = lagrangian(harmonium())
-    check_basis(lag, HARMONIUM_Z, ("c", "e", "e", "e"))
+    validate(lag, HARMONIUM_Z, ("c", "e", "e", "e"))
     coords = decouple(lag, HARMONIUM_Z, ("c", "e", "e", "e"))
     assert coords.omega_J_tilde.T == sym.Matrix([[1, -1, -1, -1], [1, -1, 1, -1], [0, 1, 0, 0]])  # eq:harm_Ltilde
     assert coords.omega_L_tilde.T == sym.Matrix([[0, 0, 1, 1], [0, 0, -1, 1], [0, 1, 0, 0]])
@@ -101,7 +110,7 @@ def test_rhombus_given_Z_free_mode_already_decoupled():
     CJ, CB, Cg, alpha = pos("C_J C_B C_g alpha")
     lag = lagrangian(rhombus())
     types = ("c", "c", "c", "fr")
-    check_basis(lag, RHOMBUS_Z, types)
+    validate(lag, RHOMBUS_Z, types)
     coords = decouple(lag, RHOMBUS_Z, types)
     assert coords.Z == RHOMBUS_Z[:, :3]  # M_C = 0 for the weighted centroid
     expected = sym.Matrix([  # eq:rh_transformed
@@ -155,7 +164,7 @@ def test_rhombus_decoupling_produces_weighted_centroid():
     weighted = sym.Matrix(phases + [[g / sum(Cg) for g in Cg]]).inv()  # eq:rh_Z
     plain = sym.Matrix(phases + [[sym.Rational(1, 4)] * 4]).inv()
     types = ("c", "c", "c", "fr")
-    check_basis(lag, plain, types)
+    validate(lag, plain, types)
     assert zero(decouple(lag, plain, types).Z - weighted[:, :3])
 
 
@@ -166,7 +175,7 @@ def test_coupled_zero_pis_give_pure_theta_theta_coupling():
     lag = lagrangian(coupled_zero_pis())
     Z, types = mode_basis(lag)
     assert sorted(types) == sorted(COUPLED_ZERO_PI_TYPES)
-    check_basis(lag, COUPLED_ZERO_PI_Z, COUPLED_ZERO_PI_TYPES)
+    validate(lag, COUPLED_ZERO_PI_Z, COUPLED_ZERO_PI_TYPES)
     coords = decouple(lag, COUPLED_ZERO_PI_Z, COUPLED_ZERO_PI_TYPES)
     assert coords.types == ("c", "e", "h", "c", "e", "h")
     Ct = 2 * C + 2 * CJ + C0 + Cc  # tilde C_theta
@@ -216,10 +225,10 @@ def test_check_basis_rejects_harmonic_direction_labelled_extended():
     lag = lagrangian(kite())
     Z, _ = mode_basis(lag)  # third column is the harmonic direction
     with pytest.raises(ValueError, match="not a valid 'e'"):
-        check_basis(lag, Z, ("c", "e", "e"))
+        validate(lag, Z, ("c", "e", "e"))
     lc = Circuit([Branch("C", 1, 0, C=1), Branch("L", 1, 0, L=1)], ground=0)
     with pytest.raises(ValueError, match="not a valid 'e'"):
-        check_basis(lagrangian(lc), sym.eye(1), ("e",))
+        validate(lagrangian(lc), sym.eye(1), ("e",))
 
 
 def test_mode_dimensions_are_circuit_invariants():
@@ -238,11 +247,13 @@ def test_infer_types_reads_the_notes_bases(build, Z, types):
     assert infer_types(lagrangian(build()), Z) == types
 
 
-def test_check_basis_decouples_before_checking_dynamical_columns():
+def test_dynamical_columns_are_checked_after_decoupling():
     # Node 1 carries a transmon (compact); node 2 is frozen (inductor only, no capacitance).
     circuit = Circuit([Branch("J", 1, 0, C=1, EJ=1), Branch("L", 2, 0, L=1)], ground=0)
     lag = lagrangian(circuit)
     Z = sym.Matrix([[1, 0], [1, 1]])  # compact column carries a frozen component
     assert infer_types(lag, Z) == ("c", "fz")
-    coords = check_basis(lag, Z, ("c", "fz"))
+    assert check_basis(lag, Z, ("c", "fz")) is None  # checks only; decoupling is a separate step
+    coords = decouple(lag, Z, ("c", "fz"))
+    check_coordinates(lag, coords)
     assert coords.Z == sym.Matrix([1, 0])  # eq:decouple_final_L removes the frozen part

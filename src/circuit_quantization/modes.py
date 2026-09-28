@@ -124,10 +124,11 @@ def mode_dimensions(lag):
 
 
 def check_basis(lag, Z_full, types):
-    """Check a square basis against tab:var_basis and return its decoupled Coordinates.
+    """Check a square basis before decoupling (tab:var_basis).
 
-    Non-dynamical columns must lie in their subspaces.  Dynamical columns are
-    checked after decoupling (eq:ZY_blocks), so Z_full need not be decoupled yet.
+    Z_full must be invertible and its non-dynamical columns must lie in their
+    subspaces.  The dynamical columns are checked by check_coordinates after
+    decouple, so Z_full need not be decoupled yet.
     """
     Z = sym.Matrix(Z_full)
     n = lag.Omega_int.rows
@@ -146,21 +147,24 @@ def check_basis(lag, Z_full, types):
         if types.count(t) != sub[t].cols:
             raise ValueError(f"Circuit has {sub[t].cols} {t!r} modes, Z_full declares {types.count(t)}")
 
-    coords = decouple(lag, Z, types)
-    columns = [j for j, t in enumerate(types) if t in DYNAMICAL]  # original index of each retained column
+
+def check_coordinates(lag, coords):
+    """Check the decoupled dynamical columns against tab:var_basis and eq:compact_period_lattice."""
+    sub = subspaces(lag)
     required = {"c": ("L",), "h": ("J",)}
     excluded = {"e": ("J", "L"), "h": ("L",)}  # extended sees both terms, harmonic the quadratic one
-    for j, t, z in zip(columns, coords.types, coords.Z.T.tolist()):
+    for j, (t, z) in enumerate(zip(coords.types, coords.Z.T.tolist())):
         z = sym.Matrix(z)
         if not all(_contains(sub[s], z) for s in required.get(t, ())) or any(
             _contains(sub[s], z) for s in excluded.get(t, ())
         ):
-            raise ValueError(f"Column {j} is not a valid {t!r} direction (tab:var_basis)")
+            raise ValueError(f"Retained column {j} is not a valid {t!r} direction (tab:var_basis)")
+    types = coords.types
     if types.count("c") != sub["c"].cols:
-        raise ValueError(f"Circuit has {sub['c'].cols} 'c' modes, Z_full declares {types.count('c')}")
+        raise ValueError(f"Circuit has {sub['c'].cols} 'c' modes, coordinates declare {types.count('c')}")
     if types.count("h") > sub["h"].cols:
-        raise ValueError(f"Circuit has at most {sub['h'].cols} 'h' modes, Z_full declares {types.count('h')}")
-    compact = [k for k, t in enumerate(coords.types) if t == "c"]
+        raise ValueError(f"Circuit has at most {sub['h'].cols} 'h' modes, coordinates declare {types.count('h')}")
+    compact = [j for j, t in enumerate(types) if t == "c"]
     if compact:
         W = (lag.omega_J_int.T * coords.Z[:, compact]).applyfunc(sym.simplify)  # omega_{J,c}^T
         if not all(_is_integer(x) for x in W):
@@ -168,7 +172,6 @@ def check_basis(lag, Z_full, types):
         minors = [sym.simplify(W.extract(list(rows), list(range(W.cols))).det()) for rows in combinations(range(W.rows), W.cols)]
         if reduce(gcd, (int(m) for m in minors), 0) != 1:
             raise ValueError("Compact periods are not primitive (eq:compact_period_lattice)")
-    return coords
 
 
 # --- decoupling and truncation ----------------------------------------------

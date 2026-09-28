@@ -32,6 +32,7 @@ from .hamiltonian import hamiltonian
 from .lagrangian import lagrangian
 from .modes import (
     check_basis,
+    check_coordinates,
     decouple,
     infer_types,
     mode_basis,

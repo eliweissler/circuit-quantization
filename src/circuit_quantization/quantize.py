@@ -9,7 +9,7 @@ from .circuit import Circuit, Loops
 from .flux import irrotational_B
 from .hamiltonian import Hamiltonian, hamiltonian
 from .lagrangian import Lagrangian, lagrangian
-from .modes import Coordinates, check_basis, infer_types, mode_basis
+from .modes import Coordinates, check_basis, check_coordinates, decouple, infer_types, mode_basis
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,9 @@ def quantize(circuit, loops, Z_full=None, types=None, coords=None):
             Z_full, types = mode_basis(lag)
         elif types is None:
             types = infer_types(lag, Z_full)
-        coords = check_basis(lag, Z_full, types)
+        check_basis(lag, Z_full, types)
+        coords = decouple(lag, Z_full, types)
+        check_coordinates(lag, coords)
     B = irrotational_B(lag, coords, loops)
     ham = hamiltonian(lag, coords, loops, B, circuit.t)
     return Result(circuit=circuit, loops=loops, lag=lag, coords=coords, B=B, ham=ham)
