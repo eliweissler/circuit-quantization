@@ -1,5 +1,6 @@
 """Circuit description, incidence matrix, and cycle basis (Sec I)."""
 
+import re
 from dataclasses import dataclass, field
 
 import networkx as nx
@@ -60,11 +61,13 @@ class Branch:
 
 
 def _ordered(nodes):
-    nodes = list(dict.fromkeys(nodes))
-    try:
-        return sorted(nodes)
-    except TypeError:
-        return nodes
+    """Distinct nodes in natural order of their string labels: 2 < 10, "q2" < "q10"."""
+
+    def key(node):
+        return [(0, int(part), "") if part.isdigit() else (1, 0, part)
+                for part in re.split(r"(\d+)", str(node)) if part]
+
+    return sorted(dict.fromkeys(nodes), key=key)
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,9 @@ class Circuit:
         names = [b.name for b in branches]
         if len(set(names)) != len(names):
             raise ValueError("Branch names must be unique")
+        labels = {self.ground} | {n for b in branches for n in (b.tail, b.head)}
+        if len({str(n) for n in labels}) != len(labels):
+            raise ValueError("Two different nodes have the same string label, e.g. 1 and '1'")
         sources = []
         for b in branches:
             if b.type == "V":
@@ -193,6 +199,9 @@ class Loops:
         for loop, cycle in cycles.items():
             if set(cycle) - set(names):
                 raise ValueError(f"Cycle {loop!r} uses unknown branches: {sorted(set(cycle) - set(names))}")
+            if any(value not in (-1, 0, 1) for value in cycle.values()):
+                # G in {0, +1, -1}: a flux is only meaningful through a physical loop (Sec I.C).
+                raise ValueError(f"Cycle {loop!r} is not a physical loop: coefficients must be 0, +1, or -1")
             rows.append([cycle.get(name, 0) for name in names])
         G = sym.Matrix(rows) if rows else sym.zeros(0, len(names))
         Omega = incidence(circuit)
@@ -221,10 +230,12 @@ class Loops:
             raise ValueError("G_new rows are not in the cycle space")
         if any(not x.is_integer for x in T) or abs(T.det()) != 1:
             raise ValueError("G_new = T G needs T integer with det T = +-1")
-        names = names or tuple(f"loop_{i + 1}" for i in range(G_new.rows))
+        names = tuple(names) if names is not None else tuple(f"loop_{i + 1}" for i in range(G_new.rows))
+        if len(names) != G_new.rows or len(set(names)) != len(names):
+            raise ValueError(f"names needs one name per row of G_new ({G_new.rows}), all distinct")
         branch_names = self.circuit.branch_names
         cycles = {
-            loop: {branch_names[k]: int(G_new[i, k]) for k in range(G_new.cols) if G_new[i, k] != 0}
+            loop: {branch_names[k]: G_new[i, k] for k in range(G_new.cols) if G_new[i, k] != 0}
             for i, loop in enumerate(names)
         }
         return Loops(self.circuit, cycles, dict(zip(names, T * self.Phi_ext)))

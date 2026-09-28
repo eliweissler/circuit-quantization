@@ -39,9 +39,9 @@ res.E_C, res.B # every intermediate is available under its notes name
 ## Conventions
 
 - **Units.** `C` in F, `L` in H, source `V` in V, loop fluxes in Wb, time in s. `EJ` and the Hamiltonian are `E/h` in GHz. Use `phase_to_weber` to pass a dimensionless external phase.
-- **Ordering.** Nodes are ordered internal | ground | source, branches capacitor | junction | inductor | source. `res.circuit.branch_names` gives the branch order.
-- **Loops.** `Loops` requires a complete cycle basis. Every cycle carries a visible flux `Phi_<name>` unless you set it explicitly, including capacitively broken cycles, whose flux changes the physics of a time-dependent drive (notes Sec V.E).
-- **Coordinates.** `quantize` builds the mode-separated basis of the notes' Table II automatically. Pass `Z_full` and `types` to use your own square basis, or `coords=cq.transform(res.coords, S1)` with an `S1` from `cq.residual_freedom(res.coords)`.
+- **Ordering.** Nodes are ordered internal | ground | source, each group sorted naturally by label (`2 < 10`, `"q2" < "q10"`; ints and strings mix). Branches are ordered capacitor | junction | inductor | source. `res.circuit.branch_names` gives the branch order.
+- **Loops.** `Loops` requires a complete cycle basis whose coefficients are 0 or ±1, so every row is a physical loop. Every cycle carries a visible flux `Phi_<name>` unless you set it explicitly, including capacitively broken cycles, whose flux changes the physics of a time-dependent drive (notes Sec V.E).
+- **Coordinates.** `quantize` builds the mode-separated basis of the notes' Table II automatically. Pass your own square `Z_full` (with or without `types`; missing types are inferred, and the basis need not be decoupled from the non-dynamical modes yet), or `coords=cq.transform(res.coords, S1)` with an `S1` from `cq.residual_freedom(res.coords)`.
 
 ## Development
 

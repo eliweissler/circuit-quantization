@@ -102,7 +102,7 @@ def test_rhombus_B_isolated_limit():
 def test_branch_offsets_invariant_under_rebase():
     circuit = harmonium()
     loops = Loops(circuit, HARMONIUM_CYCLES, {"cb": 0})
-    T = sym.Matrix([[1, 0, 0], [1, 1, 0], [-1, 0, 1]])
+    T = sym.Matrix([[1, 0, 0], [1, 1, 0], [1, 0, 1]])  # rows k, k + f, cb + k: all physical loops
     rebased = loops.rebase(T * loops.G)
     before = assign(circuit, loops, HARMONIUM_Z, ("c", "e", "e", "e")) * loops.Phi_ext
     after = assign(circuit, rebased, HARMONIUM_Z, ("c", "e", "e", "e")) * rebased.Phi_ext

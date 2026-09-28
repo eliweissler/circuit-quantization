@@ -2,7 +2,8 @@ import pytest
 import sympy as sym
 
 from circuit_quantization import (
-    Branch, Circuit, check_basis, decouple, lagrangian, mode_basis, residual_freedom, transform,
+    Branch, Circuit, check_basis, decouple, infer_types, lagrangian, mode_basis, mode_dimensions,
+    residual_freedom, transform,
 )
 from circuit_quantization.modes import subspaces
 from circuits import (
@@ -219,3 +220,29 @@ def test_check_basis_rejects_harmonic_direction_labelled_extended():
     lc = Circuit([Branch("C", 1, 0, C=1), Branch("L", 1, 0, L=1)], ground=0)
     with pytest.raises(ValueError, match="not a valid 'e'"):
         check_basis(lagrangian(lc), sym.eye(1), ("e",))
+
+
+def test_mode_dimensions_are_circuit_invariants():
+    dims = mode_dimensions(lagrangian(harmonium()))
+    assert dims == {"c": 1, "e": 2, "h": 1, "fr": 0, "fz": 0, "cy": 0}
+    # eq:harm_Z uses no harmonic column: the harmonic direction sits inside extended columns.
+    assert infer_types(lagrangian(harmonium()), HARMONIUM_Z) == ("c", "e", "e", "e")
+
+
+@pytest.mark.parametrize("build, Z, types", [
+    (zero_pi, ZERO_PI_Z, ("e", "c", "h", "cy")),
+    (rhombus, RHOMBUS_Z, ("c", "c", "c", "fr")),
+    (coupled_zero_pis, COUPLED_ZERO_PI_Z, COUPLED_ZERO_PI_TYPES),
+])
+def test_infer_types_reads_the_notes_bases(build, Z, types):
+    assert infer_types(lagrangian(build()), Z) == types
+
+
+def test_check_basis_decouples_before_checking_dynamical_columns():
+    # Node 1 carries a transmon (compact); node 2 is frozen (inductor only, no capacitance).
+    circuit = Circuit([Branch("J", 1, 0, C=1, EJ=1), Branch("L", 2, 0, L=1)], ground=0)
+    lag = lagrangian(circuit)
+    Z = sym.Matrix([[1, 0], [1, 1]])  # compact column carries a frozen component
+    assert infer_types(lag, Z) == ("c", "fz")
+    coords = check_basis(lag, Z, ("c", "fz"))
+    assert coords.Z == sym.Matrix([1, 0])  # eq:decouple_final_L removes the frozen part

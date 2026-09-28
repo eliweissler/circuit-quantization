@@ -30,7 +30,15 @@ from .circuit import Branch, Circuit, Loops, fundamental_cycles, incidence
 from .flux import irrotational_B
 from .hamiltonian import hamiltonian
 from .lagrangian import lagrangian
-from .modes import check_basis, decouple, mode_basis, residual_freedom, transform
+from .modes import (
+    check_basis,
+    decouple,
+    infer_types,
+    mode_basis,
+    mode_dimensions,
+    residual_freedom,
+    transform,
+)
 from .quantize import Result, quantize
 from .units import (
     farad_to_ghz,

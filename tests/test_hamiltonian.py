@@ -1,3 +1,4 @@
+import pytest
 import sympy as sym
 
 import circuit_quantization as cq
@@ -111,3 +112,11 @@ def test_float_parameters_in_circuits_with_loops_and_free_modes():
     cycles = cq.fundamental_cycles(floating)
     res = quantize(floating, Loops(floating, cycles, {name: 0 for name in cycles}))
     assert res.coords.types == ("c",)
+
+
+def test_quantize_infers_types_for_a_given_Z():
+    circuit = kite()
+    res = quantize(circuit, Loops(circuit, KITE_CYCLES, {"cb": 0}), KITE_Z)
+    assert res.coords.types == ("c", "e", "e")
+    with pytest.raises(ValueError, match="types requires Z_full"):
+        quantize(circuit, Loops(circuit, KITE_CYCLES, {"cb": 0}), types=("c", "e", "e"))

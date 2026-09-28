@@ -9,7 +9,7 @@ from .circuit import Circuit, Loops
 from .flux import irrotational_B
 from .hamiltonian import Hamiltonian, hamiltonian
 from .lagrangian import Lagrangian, lagrangian
-from .modes import Coordinates, check_basis, decouple, mode_basis
+from .modes import Coordinates, check_basis, infer_types, mode_basis
 
 
 @dataclass(frozen=True)
@@ -42,12 +42,20 @@ class Result:
 
 
 def quantize(circuit, loops, Z_full=None, types=None, coords=None):
+    """Quantize with the automatic basis, a given square Z_full, or given coordinates.
+
+    Z_full need not be decoupled from the non-dynamical modes; its types are
+    inferred when not given.
+    """
     lag = lagrangian(circuit)
     if coords is None:
         if Z_full is None:
+            if types is not None:
+                raise ValueError("types requires Z_full")
             Z_full, types = mode_basis(lag)
-        check_basis(lag, Z_full, types)
-        coords = decouple(lag, Z_full, types)
+        elif types is None:
+            types = infer_types(lag, Z_full)
+        coords = check_basis(lag, Z_full, types)
     B = irrotational_B(lag, coords, loops)
     ham = hamiltonian(lag, coords, loops, B, circuit.t)
     return Result(circuit=circuit, loops=loops, lag=lag, coords=coords, B=B, ham=ham)

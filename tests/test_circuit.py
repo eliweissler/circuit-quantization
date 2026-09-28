@@ -96,3 +96,32 @@ def test_rebase_maps_fluxes_and_rejects_non_unimodular():
     assert rebased.Phi_ext == T * loops.Phi_ext
     with pytest.raises(ValueError, match="det"):
         loops.rebase(2 * loops.G)
+
+
+def test_nodes_sort_naturally_across_label_types():
+    circuit = Circuit([
+        Branch("J1", "q10", "gnd", C=C, EJ=EJ), Branch("J2", 2, "gnd", C=C, EJ=EJ),
+        Branch("J3", "q2", "gnd", C=C, EJ=EJ), Branch("J4", 10, "gnd", C=C, EJ=EJ),
+    ], ground="gnd")
+    assert circuit.internal_nodes == (2, 10, "q2", "q10")
+
+
+def test_node_labels_must_differ_as_strings():
+    with pytest.raises(ValueError, match="same string label"):
+        Circuit([Branch("J1", 1, 0, C=C, EJ=EJ), Branch("J2", "1", 0, C=C, EJ=EJ)], ground=0)
+
+
+@pytest.mark.parametrize("cycle", [
+    {"J1": sym.Rational(1, 2), "J2": sym.Rational(-1, 2), "L1": sym.Rational(1, 2), "L2": sym.Rational(-1, 2)},
+    {"J1": 2, "J2": -2, "L1": 2, "L2": -2},
+])
+def test_loops_reject_coefficients_outside_unit_set(cycle):
+    # Each row of G is a physical loop, G in {0, +1, -1} (eq:G_OmegaT).
+    with pytest.raises(ValueError, match="physical loop"):
+        Loops(harmonium(), {**HARMONIUM_CYCLES, "k": cycle})
+
+
+def test_rebase_requires_one_name_per_row():
+    loops = Loops(harmonium(), HARMONIUM_CYCLES, {"cb": 0})
+    with pytest.raises(ValueError, match="one name per row"):
+        loops.rebase(loops.G, names=("a", "b"))

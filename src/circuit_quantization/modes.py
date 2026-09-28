@@ -112,8 +112,23 @@ def _is_integer(x):
     return sym.nsimplify(sym.simplify(x)).is_integer
 
 
+def mode_dimensions(lag):
+    """Dimensions of the six subspaces of tab:var_basis, which are circuit invariants.
+
+    These differ from the column types of a particular Z: the compact and
+    non-dynamical counts are fixed, but the harmonic count is only a maximum,
+    since a harmonic direction may sit inside extended columns (eq:S1_structure).
+    """
+    sub = subspaces(lag)
+    return {t: sub[t].cols for t in TYPES}
+
+
 def check_basis(lag, Z_full, types):
-    """Check a square basis against tab:var_basis and eq:compact_period_lattice."""
+    """Check a square basis against tab:var_basis and return its decoupled Coordinates.
+
+    Non-dynamical columns must lie in their subspaces.  Dynamical columns are
+    checked after decoupling (eq:ZY_blocks), so Z_full need not be decoupled yet.
+    """
     Z = sym.Matrix(Z_full)
     n = lag.Omega_int.rows
     types = tuple(types)
@@ -124,24 +139,36 @@ def check_basis(lag, Z_full, types):
     if sym.simplify(Z.det()) == 0:
         raise ValueError("Z_full is singular")
     sub = subspaces(lag)
-    required = {"c": "L", "h": "J", "fr": "JL", "fz": "C", "cy": "cy"}
-    excluded = {"e": ("J", "L"), "h": ("L",)}  # extended sees both terms, harmonic the quadratic one
     for j, t in enumerate(types):
-        inside = t in required and not _contains(sub[required[t]], Z[:, j])
-        outside = any(_contains(sub[s], Z[:, j]) for s in excluded.get(t, ()))
-        if inside or outside:
+        if t in NONDYNAMICAL and not _contains(sub[{"fr": "JL", "fz": "C", "cy": "cy"}[t]], Z[:, j]):
             raise ValueError(f"Column {j} is not a valid {t!r} direction (tab:var_basis)")
-    for t in ("c",) + NONDYNAMICAL:
+    for t in NONDYNAMICAL:
         if types.count(t) != sub[t].cols:
             raise ValueError(f"Circuit has {sub[t].cols} {t!r} modes, Z_full declares {types.count(t)}")
-    compact = [j for j, t in enumerate(types) if t == "c"]
+
+    coords = decouple(lag, Z, types)
+    columns = [j for j, t in enumerate(types) if t in DYNAMICAL]  # original index of each retained column
+    required = {"c": ("L",), "h": ("J",)}
+    excluded = {"e": ("J", "L"), "h": ("L",)}  # extended sees both terms, harmonic the quadratic one
+    for j, t, z in zip(columns, coords.types, coords.Z.T.tolist()):
+        z = sym.Matrix(z)
+        if not all(_contains(sub[s], z) for s in required.get(t, ())) or any(
+            _contains(sub[s], z) for s in excluded.get(t, ())
+        ):
+            raise ValueError(f"Column {j} is not a valid {t!r} direction (tab:var_basis)")
+    if types.count("c") != sub["c"].cols:
+        raise ValueError(f"Circuit has {sub['c'].cols} 'c' modes, Z_full declares {types.count('c')}")
+    if types.count("h") > sub["h"].cols:
+        raise ValueError(f"Circuit has at most {sub['h'].cols} 'h' modes, Z_full declares {types.count('h')}")
+    compact = [k for k, t in enumerate(coords.types) if t == "c"]
     if compact:
-        W = (lag.omega_J_int.T * Z[:, compact]).applyfunc(sym.simplify)  # omega_{J,c}^T
+        W = (lag.omega_J_int.T * coords.Z[:, compact]).applyfunc(sym.simplify)  # omega_{J,c}^T
         if not all(_is_integer(x) for x in W):
             raise ValueError("omega_J,c^T must be integer (Sec IV.B.1)")
         minors = [sym.simplify(W.extract(list(rows), list(range(W.cols))).det()) for rows in combinations(range(W.rows), W.cols)]
         if reduce(gcd, (int(m) for m in minors), 0) != 1:
             raise ValueError("Compact periods are not primitive (eq:compact_period_lattice)")
+    return coords
 
 
 # --- decoupling and truncation ----------------------------------------------
@@ -203,6 +230,28 @@ def decouple(lag, Z_full, types):
         if (Z_1.T * form * Z_2).applyfunc(sym.cancel) != sym.zeros(Z_1.cols, Z_2.cols):
             raise AssertionError(f"Nonzero {name} cross block after decoupling (eq:ZY_blocks)")
     return coordinates(lag, Z_1, retained_types)
+
+
+def infer_types(lag, Z_full):
+    """Mode type of each column of a square Z_full, read off tab:var_basis.
+
+    Non-dynamical columns are those lying in their subspaces.  The rest are
+    decoupled first (eq:ZY_blocks) and then read off: compact if in N(L*),
+    harmonic if in N(omega_J^T), extended otherwise.
+    """
+    Z = sym.Matrix(Z_full)
+    sub = subspaces(lag)
+    types = []
+    for j in range(Z.cols):
+        z = Z[:, j]
+        types.append("cy" if _contains(sub["cy"], z) else "fz" if _contains(sub["C"], z)
+                     else "fr" if _contains(sub["JL"], z) else "e")
+    retained = iter(decouple(lag, Z, types).Z.T.tolist())
+    for j, t in enumerate(types):
+        if t == "e":
+            z = sym.Matrix(next(retained))
+            types[j] = "c" if _contains(sub["L"], z) else "h" if _contains(sub["J"], z) else "e"
+    return tuple(types)
 
 
 # --- residual freedom -------------------------------------------------------
