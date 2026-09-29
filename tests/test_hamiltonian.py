@@ -128,7 +128,7 @@ def test_quantize_rebuilds_charging_energy_for_changed_circuit():
 
     a, b = transmon(1), transmon(2)
     first = quantize(a, Loops(a, {}))
-    second = quantize(b, Loops(b, {}), S1=sym.eye(1))
+    second = quantize(b, Loops(b, {}))
     assert second.ham.E_C == first.ham.E_C / 2
     with pytest.raises(TypeError, match="coords"):
         quantize(b, Loops(b, {}), coords=first.coords)
@@ -136,17 +136,19 @@ def test_quantize_rebuilds_charging_energy_for_changed_circuit():
         quantize(b, Loops(a, {}))
 
 
-def test_quantize_reclassifies_residual_mixing_and_preserves_hamiltonian():
+def test_result_transform_reclassifies_residual_mixing_and_preserves_hamiltonian():
     circuit = kite()
     loops = Loops(circuit, KITE_CYCLES, {"cb": 0})
     original = quantize(circuit, loops)
+    assert original.residual_freedom(keep_harmonic=False)[1, 2] != 0  # extended may mix into harmonic
     S = sym.Matrix([[1, 0, 0], [0, 1, 1], [0, 0, 1]])
-    mixed = quantize(circuit, loops, S1=S)
+    mixed = original.transform(S)
     assert mixed.coords.types == ("c", "e", "e")
+    assert mixed.circuit is circuit and mixed.loops is loops
     substitution = dict(zip(original.ham.varphi, S * mixed.ham.varphi))
     substitution.update(zip(original.ham.n, S.inv().T * mixed.ham.n))
     assert sym.simplify(original.H.subs(substitution, simultaneous=True) - mixed.H) == 0
-    restored = quantize(circuit, loops, mixed.coords.Z, mixed.coords.types, S1=S.inv())
+    restored = mixed.transform(S.inv())
     assert restored.coords.types == ("c", "e", "h")
     assert sym.simplify(restored.H - original.H) == 0
 
