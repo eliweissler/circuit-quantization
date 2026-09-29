@@ -1,7 +1,7 @@
 import sympy as sym
 
 from circuit_quantization import (
-    Branch, Loops, decouple, fundamental_cycles, irrotational_B, lagrangian, mode_basis,
+    Branch, Circuit, Loops, decouple, fundamental_cycles, irrotational_B, lagrangian, mode_basis,
 )
 from circuits import (
     HARMONIUM_CYCLES, HARMONIUM_Z, KITE_CYCLES, KITE_Z, RHOMBUS_CYCLES, RHOMBUS_Z,
@@ -124,3 +124,17 @@ def test_coupled_example_assignment_is_fast():
     finally:
         signal.alarm(0)
     assert B.shape == (15, 9)
+
+
+def test_irrotational_assignment_satisfies_both_constraints():
+    CJ, C1, C2 = pos("C_J C_1 C_2")
+    circuit = Circuit([
+        Branch("J", 1, 2, C=CJ, EJ=1),
+        Branch("C1", 1, 0, C=C1), Branch("C2", 2, 0, C=C2),
+    ], ground=0)  # Includes a discarded free mode and a capacitive loop.
+    lag = lagrangian(circuit)
+    coords = decouple(lag, *mode_basis(lag))
+    loops = Loops(circuit, fundamental_cycles(circuit))
+    B = irrotational_B(lag, coords, loops)
+    assert (loops.G * B - sym.eye(loops.G.rows)).applyfunc(sym.cancel).is_zero_matrix
+    assert (coords.Z.T * lag.Omega_int * lag.C_b * B).applyfunc(sym.cancel).is_zero_matrix

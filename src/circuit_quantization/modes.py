@@ -31,20 +31,12 @@ class Coordinates:
 # --- subspaces, each a matrix of basis columns ------------------------------
 
 
-def _primitive(v):
-    """Scale a rational vector to coprime integers, for readability."""
-    denominators = [sym.fraction(sym.nsimplify(x))[1] for x in v]
-    v = v * reduce(sym.ilcm, denominators, 1)
-    divisor = reduce(gcd, (int(x) for x in v), 0)
-    return v / divisor if divisor else v
-
-
 def _columns(vectors, n):
     return sym.Matrix.hstack(*vectors) if vectors else sym.zeros(n, 0)
 
 
 def _null(A, n):
-    return _columns([_primitive(v) for v in A.nullspace()], n)
+    return _columns(A.nullspace(), n)
 
 
 def _perp(S):
@@ -151,14 +143,10 @@ def check_basis(lag, Z_full, types):
 def check_coordinates(lag, coords):
     """Check the decoupled dynamical columns against tab:var_basis and eq:compact_period_lattice."""
     sub = subspaces(lag)
-    required = {"c": ("L",), "h": ("J",)}
-    excluded = {"e": ("J", "L"), "h": ("L",)}  # extended sees both terms, harmonic the quadratic one
-    for j, (t, z) in enumerate(zip(coords.types, coords.Z.T.tolist())):
-        z = sym.Matrix(z)
-        if not all(_contains(sub[s], z) for s in required.get(t, ())) or any(
-            _contains(sub[s], z) for s in excluded.get(t, ())
-        ):
-            raise ValueError(f"Retained column {j} is not a valid {t!r} direction (tab:var_basis)")
+    actual = _mode_types(coords.omega_J_tilde, coords.omega_L_tilde)
+    for j, (declared, inferred) in enumerate(zip(coords.types, actual)):
+        if declared != inferred:
+            raise ValueError(f"Retained column {j} is not a valid {declared!r} direction (tab:var_basis)")
     types = coords.types
     if types.count("c") != sub["c"].cols:
         raise ValueError(f"Circuit has {sub['c'].cols} 'c' modes, coordinates declare {types.count('c')}")
@@ -177,84 +165,67 @@ def check_coordinates(lag, coords):
 # --- decoupling and truncation ----------------------------------------------
 
 
-def _orthogonalize(vectors, form):
-    """Gram-Schmidt in the bilinear form, so each step divides by a positive scalar."""
-    result = []
-    for v in vectors:
-        for u in result:
-            v = v - (u.T * form * v)[0] / (u.T * form * u)[0] * u
-        result.append(v.applyfunc(sym.cancel))
-    return result
+def _mode_types(omega_J, omega_L):
+    """Classify retained columns by junction and inductor participation (tab:var_basis)."""
+    return tuple(
+        "e" if any(j) and any(l) else "c" if any(j) else "h" if any(l) else "fr"
+        for j, l in zip(omega_J.applyfunc(sym.simplify).tolist(),
+                        omega_L.applyfunc(sym.simplify).tolist())
+    )
 
 
-def coordinates(lag, Z, types):
+def coordinates(lag, Z, types=None):
     """Transformed objects of the retained block Z (eq:Zd_schur)."""
     Z = sym.Matrix(Z)
     C_tilde = (Z.T * lag.C_int * Z).applyfunc(sym.cancel)
     if sym.cancel(C_tilde.det()) == 0:
         raise ValueError("Retained capacitance matrix is singular")
+    omega_J, omega_L = Z.T * lag.omega_J_int, Z.T * lag.omega_L_int
     freeze = sym.ImmutableMatrix
     return Coordinates(
-        Z=freeze(Z), types=tuple(types), C_tilde=freeze(C_tilde),
+        Z=freeze(Z), types=_mode_types(omega_J, omega_L) if types is None else tuple(types),
+        C_tilde=freeze(C_tilde),
         C_tilde_inv=freeze(C_tilde.inv().applyfunc(sym.cancel)),
         Lstar_tilde=freeze((Z.T * lag.Lstar_int * Z).applyfunc(sym.cancel)),
-        omega_J_tilde=freeze(Z.T * lag.omega_J_int),
-        omega_L_tilde=freeze(Z.T * lag.omega_L_int),
+        omega_J_tilde=freeze(omega_J), omega_L_tilde=freeze(omega_L),
     )
 
 
-def decouple(lag, Z_full, types):
-    """Retained block Z_1 + Z_2 M of eq:ZY_blocks, then truncation (Sec III.B).
+def _decouple_column(v, nondynamical, form):
+    """Eliminate discarded columns in reverse order, updating all earlier columns."""
+    Z = sym.Matrix.hstack(v, nondynamical)
+    for i in range(Z.cols - 1, 0, -1):
+        w = Z[:, i]
+        pivot = sym.cancel((w.T * form * w)[0])
+        if pivot != 0:  # A null direction of this positive-semidefinite form needs no correction.
+            Z[:, :i] = (Z[:, :i] - w * (w.T * form * Z[:, :i]) / pivot).applyfunc(sym.cancel)
+    return Z[:, 0]
 
-    M_C = -C~_22^{-1} C~_21 (eq:decouple_final) acts on the free block and
-    M_L = -L~*_22^{-1} L~*_21 (eq:decouple_final_L) on the frozen block.
-    Each block is first orthogonalized in its own form, which makes C~_22 and
-    L~*_22 diagonal, so M is applied one column and one mode at a time.
+
+def decouple(lag, Z_full, types):
+    """Decouple one column at a time, then truncate (eq:ZY_blocks, Sec III.B).
+
+    Eliminate free directions in C and frozen directions in L* serially
+    (eq:decouple_final, eq:decouple_final_L), updating the remaining columns.
+    Cyclic directions are discarded; no discarded-sector matrix is inverted.
     """
     Z = sym.Matrix(Z_full)
-    columns = [Z[:, j] for j in range(Z.cols)]
-    free = _orthogonalize([z for z, t in zip(columns, types) if t == "fr"], lag.C_int)
-    frozen = _orthogonalize([z for z, t in zip(columns, types) if t == "fz"], lag.Lstar_int)
+    sectors = [
+        (form, Z[:, [j for j, t in enumerate(types) if t == kind]])
+        for kind, form in (("fr", lag.C_int), ("fz", lag.Lstar_int))
+    ]
     retained, retained_types = [], []
-    for z, t in zip(columns, types):
+    for j, t in enumerate(types):
         if t not in DYNAMICAL:
             continue
-        for v in free:
-            z = z - (v.T * lag.C_int * z)[0] / (v.T * lag.C_int * v)[0] * v
-        for w in frozen:
-            z = z - (w.T * lag.Lstar_int * z)[0] / (w.T * lag.Lstar_int * w)[0] * w
+        z = Z[:, j]
+        for form, nondynamical in sectors:
+            z = _decouple_column(z, nondynamical, form)
         retained.append(z.applyfunc(sym.cancel))
         retained_types.append(t)
     if not retained:
         raise ValueError("Circuit has no dynamical modes")
-    Z_1 = sym.Matrix.hstack(*retained)
-    Z_2 = _columns([z for z, t in zip(columns, types) if t in NONDYNAMICAL], Z.rows)
-    for name, form in (("capacitance", lag.C_int), ("susceptance", lag.Lstar_int)):
-        if (Z_1.T * form * Z_2).applyfunc(sym.cancel) != sym.zeros(Z_1.cols, Z_2.cols):
-            raise AssertionError(f"Nonzero {name} cross block after decoupling (eq:ZY_blocks)")
-    return coordinates(lag, Z_1, retained_types)
-
-
-def infer_types(lag, Z_full):
-    """Mode type of each column of a square Z_full, read off tab:var_basis.
-
-    Non-dynamical columns are those lying in their subspaces.  The rest are
-    decoupled first (eq:ZY_blocks) and then read off: compact if in N(L*),
-    harmonic if in N(omega_J^T), extended otherwise.
-    """
-    Z = sym.Matrix(Z_full)
-    sub = subspaces(lag)
-    types = []
-    for j in range(Z.cols):
-        z = Z[:, j]
-        types.append("cy" if _contains(sub["cy"], z) else "fz" if _contains(sub["C"], z)
-                     else "fr" if _contains(sub["JL"], z) else "e")
-    retained = iter(decouple(lag, Z, types).Z.T.tolist())
-    for j, t in enumerate(types):
-        if t == "e":
-            z = sym.Matrix(next(retained))
-            types[j] = "c" if _contains(sub["L"], z) else "h" if _contains(sub["J"], z) else "e"
-    return tuple(types)
+    return coordinates(lag, sym.Matrix.hstack(*retained), retained_types)
 
 
 # --- residual freedom -------------------------------------------------------
@@ -279,8 +250,12 @@ def residual_freedom(coords, keep_harmonic=True):
     )
 
 
-def transform(coords, S1):
-    """Apply Z -> Z S_1 to the retained coordinates (eq:S1_structure, eq:Scc_unimodular)."""
+def transform(lag, coords, S1):
+    """Apply Z -> Z S_1, rebuild from lag, and classify the final columns.
+
+    The allowed mixing follows eq:S1_structure and eq:Scc_unimodular;
+    cancellations can restore harmonic axes inside the extended block.
+    """
     S = sym.Matrix(S1)
     types = coords.types
     if S.shape != (len(types), len(types)) or sym.simplify(S.det()) == 0:
@@ -293,16 +268,6 @@ def transform(coords, S1):
     S_cc = S.extract(compact, compact).applyfunc(sym.simplify)
     if compact and (not all(_is_integer(x) for x in S_cc) or abs(S_cc.det()) != 1):
         raise ValueError("S_cc must lie in GL(N_c, Z) (eq:Scc_unimodular)")
-    new_types = tuple(
-        "e" if t == "h" and any(S[i, j] != 0 for i, u in enumerate(types) if u == "e") else t
-        for j, t in enumerate(types)
-    )
-    freeze = sym.ImmutableMatrix
-    C_tilde = (S.T * coords.C_tilde * S).applyfunc(sym.cancel)
-    return Coordinates(
-        Z=freeze(coords.Z * S), types=new_types, C_tilde=freeze(C_tilde),
-        C_tilde_inv=freeze(C_tilde.inv().applyfunc(sym.cancel)),
-        Lstar_tilde=freeze((S.T * coords.Lstar_tilde * S).applyfunc(sym.cancel)),
-        omega_J_tilde=freeze(S.T * coords.omega_J_tilde),
-        omega_L_tilde=freeze(S.T * coords.omega_L_tilde),
-    )
+    new = coordinates(lag, coords.Z * S)
+    check_coordinates(lag, new)
+    return new

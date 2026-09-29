@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import sympy as sym
 
-from .units import GHz, e, h, phi0
+from .units import e, farad_to_ghz, henry_to_ghz, weber_to_phase
 
 
 @dataclass(frozen=True)
@@ -19,18 +19,30 @@ class Hamiltonian:
     E_Lb: sym.ImmutableMatrix
 
 
-def hamiltonian(lag, coords, loops, B, t):
+def simplify_hamiltonian(H):
+    """Combine trigonometric terms, then factor each term's numerator and denominator.
+
+    Keep the Hamiltonian as a sum rather than collecting it over one denominator.
+    This optional symbolic step can be expensive for large circuits.
+    """
+    H = sym.sympify(H)
+    algebraic, trig = H.as_independent(*H.atoms(sym.sin, sym.cos), as_Add=True)
+    H = algebraic + sym.trigsimp(trig, method="fu")
+    return sym.Add(*(sym.factor(term) for term in sym.Add.make_args(H)))
+
+
+def hamiltonian(lag, coords, loops, B, t, *, simplify=False):
     N_d = coords.Z.cols
     varphi = sym.Matrix(sym.symbols(f"varphi_1:{N_d + 1}", real=True))
     n = sym.Matrix(sym.symbols(f"n_1:{N_d + 1}", real=True))
     Z, B = sym.Matrix(coords.Z), sym.Matrix(B)
     Phi_ext = sym.Matrix(loops.Phi_ext)
-    varphi_ext = Phi_ext / phi0  # eq:dimless_defs
+    varphi_ext = weber_to_phase(Phi_ext)  # eq:dimless_defs
 
-    # eq:EC_EL_matrix, divided by 1e9 for GHz.
-    E_C = (e**2 / (2 * h * GHz) * coords.C_tilde_inv).applyfunc(sym.cancel)
-    E_L = (phi0**2 / (h * GHz) * coords.Lstar_tilde).applyfunc(sym.cancel)
-    E_Lb = (phi0**2 / (h * GHz) * lag.Lb_inv).applyfunc(sym.cancel)
+    # eq:EC_EL_matrix: scale inverse-element matrices by the unit-element energies.
+    E_C = (farad_to_ghz(1) * coords.C_tilde_inv).applyfunc(sym.cancel)
+    E_L = (henry_to_ghz(1) * coords.Lstar_tilde).applyfunc(sym.cancel)
+    E_Lb = (henry_to_ghz(1) * lag.Lb_inv).applyfunc(sym.cancel)
 
     # eq:Q_g_tilde_expanded; the flux term vanishes for irrotational B.
     Q_g = Z.T * (-lag.C_int_src * lag.V + lag.Omega_int * lag.C_b * B * Phi_ext.diff(t))
@@ -49,6 +61,6 @@ def hamiltonian(lag, coords, loops, B, t):
 
     freeze = sym.ImmutableMatrix
     return Hamiltonian(
-        H=H, varphi=freeze(varphi), n=freeze(n), n_g=freeze(n_g),
+        H=simplify_hamiltonian(H) if simplify else H, varphi=freeze(varphi), n=freeze(n), n_g=freeze(n_g),
         varphi_ext=freeze(varphi_ext), E_C=freeze(E_C), E_L=freeze(E_L), E_Lb=freeze(E_Lb),
     )

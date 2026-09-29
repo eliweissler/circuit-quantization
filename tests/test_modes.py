@@ -2,11 +2,11 @@ import pytest
 import sympy as sym
 
 from circuit_quantization import (
-    Branch, Circuit, check_basis, check_coordinates, decouple, infer_types, lagrangian, mode_basis,
+    Branch, Circuit, check_basis, check_coordinates, decouple, lagrangian, mode_basis,
     mode_dimensions,
     residual_freedom, transform,
 )
-from circuit_quantization.modes import subspaces
+from circuit_quantization.modes import _decouple_column, subspaces
 from circuits import (
     COUPLED_ZERO_PI_TYPES, COUPLED_ZERO_PI_Z, HARMONIUM_Z, RHOMBUS_Z, ZERO_PI_Z,
     coupled, coupled_zero_pis, harmonium, kite, pos, rhombus, zero_pi,
@@ -122,9 +122,12 @@ def test_rhombus_given_Z_free_mode_already_decoupled():
     assert coords.omega_J_tilde.T == sym.Matrix([[-1, 0, 0], [0, -1, 0], [0, 0, -1], [1, 1, 1]])
 
 
-def test_mode_by_mode_decoupling_equals_block_formula():
+@pytest.mark.parametrize("equal_C", [False, True])
+def test_two_coupled_free_modes_decouple(equal_C):
     # Two floating transmons coupled by C_x: two free modes coupled to each other in C.
     Ca, Cb, Cx, C1, C2, C3, C4 = pos("C_a C_b C_x C_1 C_2 C_3 C_4")
+    if equal_C:
+        Ca = Cb = Cx = C1 = C2 = C3 = C4 = pos("C")
     circuit = Circuit([
         Branch("Ja", 1, 2, C=Ca, EJ=1), Branch("Jb", 3, 4, C=Cb, EJ=1), Branch("Cx", 2, 3, C=Cx),
         Branch("C1", 1, 0, C=C1), Branch("C2", 2, 0, C=C2), Branch("C3", 3, 0, C=C3), Branch("C4", 4, 0, C=C4),
@@ -136,8 +139,8 @@ def test_mode_by_mode_decoupling_equals_block_formula():
     dyn = [j for j, t in enumerate(types) if t in ("c", "e", "h")]
     free = [j for j, t in enumerate(types) if t == "fr"]
     Z1, Z2 = Z[:, dyn], Z[:, free]
-    M = -(Z2.T * lag.C_int * Z2).inv() * (Z2.T * lag.C_int * Z1)  # eq:decouple_final
-    assert zero(coords.Z - (Z1 + Z2 * M))  # eq:ZY_blocks
+    assert zero(coords.Z.T * lag.C_int * Z2)
+    assert same_span(Z2, sym.Matrix.hstack(Z2, coords.Z - Z1))  # correction stays in the free sector
 
 
 def test_frozen_node_gives_series_inductance():
@@ -148,6 +151,9 @@ def test_frozen_node_gives_series_inductance():
     assert types == ("e", "fz")
     coords = decouple(lag, Z, types)
     assert zero(coords.Lstar_tilde - sym.Matrix([[1 / (La + Lb)]]))
+    frozen = Z[:, [types.index("fz")]]
+    assert zero(coords.Z.T * lag.Lstar_int * frozen)
+    assert zero(coords.Z.T * lag.C_int * frozen)
 
 
 def test_rhombus_decoupling_produces_weighted_centroid():
@@ -204,7 +210,7 @@ def test_transform_is_a_congruence_and_updates_types():
     Z, types = mode_basis(lag)
     coords = decouple(lag, Z, types)
     S = sym.Matrix([[1, 1, 0], [0, 1, 1], [0, 0, 1]])
-    new = transform(coords, S)
+    new = transform(lag, coords, S)
     assert new.types == ("c", "e", "e")  # S_eh != 0 promotes harmonic to extended
     assert zero(new.C_tilde - S.T * coords.C_tilde * S)
     assert new.Z == coords.Z * S
@@ -218,7 +224,7 @@ def test_transform_rejects_disallowed_mixing(S, message):
     lag = lagrangian(kite())
     coords = decouple(lag, *mode_basis(lag))
     with pytest.raises(ValueError, match=message):
-        transform(coords, S)
+        transform(lag, coords, S)
 
 
 def test_check_basis_rejects_harmonic_direction_labelled_extended():
@@ -235,7 +241,7 @@ def test_mode_dimensions_are_circuit_invariants():
     dims = mode_dimensions(lagrangian(harmonium()))
     assert dims == {"c": 1, "e": 2, "h": 1, "fr": 0, "fz": 0, "cy": 0}
     # eq:harm_Z uses no harmonic column: the harmonic direction sits inside extended columns.
-    assert infer_types(lagrangian(harmonium()), HARMONIUM_Z) == ("c", "e", "e", "e")
+    assert validate(lagrangian(harmonium()), HARMONIUM_Z, ("c", "e", "e", "e")).types == ("c", "e", "e", "e")
 
 
 @pytest.mark.parametrize("build, Z, types", [
@@ -243,8 +249,8 @@ def test_mode_dimensions_are_circuit_invariants():
     (rhombus, RHOMBUS_Z, ("c", "c", "c", "fr")),
     (coupled_zero_pis, COUPLED_ZERO_PI_Z, COUPLED_ZERO_PI_TYPES),
 ])
-def test_infer_types_reads_the_notes_bases(build, Z, types):
-    assert infer_types(lagrangian(build()), Z) == types
+def test_explicit_notes_bases(build, Z, types):
+    assert validate(lagrangian(build()), Z, types).types == tuple(t for t in types if t in ("c", "e", "h"))
 
 
 def test_dynamical_columns_are_checked_after_decoupling():
@@ -252,8 +258,64 @@ def test_dynamical_columns_are_checked_after_decoupling():
     circuit = Circuit([Branch("J", 1, 0, C=1, EJ=1), Branch("L", 2, 0, L=1)], ground=0)
     lag = lagrangian(circuit)
     Z = sym.Matrix([[1, 0], [1, 1]])  # compact column carries a frozen component
-    assert infer_types(lag, Z) == ("c", "fz")
     assert check_basis(lag, Z, ("c", "fz")) is None  # checks only; decoupling is a separate step
     coords = decouple(lag, Z, ("c", "fz"))
     check_coordinates(lag, coords)
     assert coords.Z == sym.Matrix([1, 0])  # eq:decouple_final_L removes the frozen part
+
+
+def test_transform_recovers_harmonic_axis_after_extended_mixing():
+    lag = lagrangian(kite())
+    original = decouple(lag, *mode_basis(lag))
+    S = sym.Matrix([[1, 0, 0], [0, 1, 1], [0, 0, 1]])
+    mixed = transform(lag, original, S)
+    assert mixed.types == ("c", "e", "e")
+    restored = transform(lag, mixed, S.inv())
+    assert restored.types == ("c", "e", "h")
+    assert zero(restored.Z - original.Z)
+    check_coordinates(lag, restored)
+
+
+@pytest.mark.parametrize("build", [coupled, zero_pi, rhombus])
+def test_decoupled_sectors_have_no_cross_terms(build):
+    lag = lagrangian(build())
+    Z, types = mode_basis(lag)
+    coords = decouple(lag, Z, types)
+    discarded = Z[:, [j for j, t in enumerate(types) if t in ("fr", "fz", "cy")]]
+    assert zero(coords.Z.T * lag.C_int * discarded)
+    assert zero(coords.Z.T * lag.Lstar_int * discarded)
+    assert zero(lag.omega_J_int.T * discarded)
+
+
+
+def test_equal_elements_decouple_with_singular_discarded_capacitance():
+    C, L = pos("C L")
+    circuit = Circuit([
+        Branch("Ja", 1, 2, C=C, EJ=1),
+        Branch("C1", 1, 0, C=C), Branch("C2", 2, 0, C=C),
+        Branch("Jb", 3, 0, C=C, EJ=1),
+        Branch("L1", 3, 4, L=L), Branch("L2", 4, 5, L=L), Branch("L3", 5, 0, L=L),
+    ], ground=0)
+    lag = lagrangian(circuit)
+    Z, types = mode_basis(lag)
+    assert types.count("fr") == 1 and types.count("fz") == 2
+    discarded = Z[:, [j for j, t in enumerate(types) if t in ("fr", "fz", "cy")]]
+    assert (discarded.T * lag.C_int * discarded).det() == 0
+    coords = validate(lag, Z, types)
+    assert zero(coords.Z.T * lag.C_int * discarded)
+    assert zero(coords.Z.T * lag.Lstar_int * discarded)
+    assert zero(coords.C_tilde - sym.diag(3 * C / 2, C))
+    assert zero(coords.Lstar_tilde - sym.diag(0, 1 / (3 * L)))
+
+
+@pytest.mark.parametrize("form, expected", [
+    (sym.Matrix([[3, 1, 1], [1, 2, 1], [1, 1, 2]]),
+     sym.Matrix([1, -sym.Rational(1, 3), -sym.Rational(1, 3)])),
+    # Equal entries give a singular discarded block; elimination exposes a null pivot.
+    (sym.Matrix([[2, 1, 1], [1, 1, 1], [1, 1, 1]]), sym.Matrix([1, 0, -1])),
+])
+def test_serial_decoupling_updates_remaining_columns_and_skips_null_pivots(form, expected):
+    Z = sym.eye(3)
+    retained = _decouple_column(Z[:, 0], Z[:, 1:], form)
+    assert retained == expected
+    assert zero(retained.T * form * Z[:, 1:])

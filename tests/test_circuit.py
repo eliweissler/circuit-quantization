@@ -8,7 +8,7 @@ C, EJ, L = sym.symbols("C E_J L", positive=True)
 
 
 @pytest.mark.parametrize("kwargs, message", [
-    (dict(EJ=EJ), "needs C > 0"),
+    (dict(C=0, EJ=EJ), "needs C > 0"),
     (dict(C=C, L=L, EJ=EJ), "at most one"),
     (dict(C=C, V=1), "must have C = 0"),
     (dict(C=sym.Symbol("x")), "provably positive"),
@@ -18,11 +18,76 @@ def test_branch_validation(kwargs, message):
         Branch("b", 1, 0, **kwargs)
 
 
+@pytest.mark.parametrize("name,kind,variables", [
+    ("C1", "C", ("C_1",)), ("L1", "L", ("L_1",)),
+    ("J1", "J", ("C_J1", "E_J1")), ("V1", "V", ("V_1",)),
+    ("C", "C", ("C",)), ("J_1", "J", ("C_J1", "E_J1")),
+])
+def test_automatic_branch_symbols(name, kind, variables):
+    branch = Branch(name, 1, 0)
+    assert branch.type == kind
+    assert tuple(map(str, branch.variables)) == variables
+    assert all(v.is_real for v in branch.variables)
+    assert all(v.is_positive for v in branch.variables) if kind != "V" else branch.V.is_positive is None
+    if kind == "L":
+        assert branch.C == 0
+
+
+def test_automatic_energy_symbols_and_explicit_values():
+    from circuit_quantization import farad_to_ghz, henry_to_ghz
+    junction = Branch("J1", 1, 0, energy_symbols=True)
+    ec, ej = junction.variables
+    assert (str(ec), str(ej)) == ("E_CJ1", "E_J1")
+    assert farad_to_ghz(junction.C) == ec
+    inductor = Branch("L1", 1, 0, energy_symbols=True)
+    assert henry_to_ghz(inductor.L) == inductor.variables[0]
+    assert str(inductor.variables[0]) == "E_L1"
+    assert Branch("J1", 1, 0, EJ=3).variables == (sym.Symbol("C_J1", positive=True),)
+    assert Branch("custom", 1, 0, C=2, EJ=3, energy_symbols=True).variables == ()
+    assert Branch("custom", 1, 0, C=2, EJ=3, energy_symbols=True).C == 2
+    with pytest.raises(ValueError, match="name starting"):
+        Branch("unknown", 1, 0)
+
+
+def test_variables_preserve_order_shared_symbols_and_loop_rebasing():
+    junction = Branch("J1", 1, 0, energy_symbols=True)
+    circuit = Circuit([junction, Branch("J2", 1, 0, C=junction.C, EJ=junction.EJ),
+                       Branch("C1", 1, 0)], ground=0)
+    assert circuit.variables == (sym.Symbol("C_1", positive=True), *junction.variables)
+    loops = Loops(circuit, {"k": {"J1": 1, "J2": -1}, "cb": {"C1": 1, "J1": -1}}, {"cb": 0})
+    assert loops.variables == (sym.Symbol("Phi_k", real=True),)
+    assert loops.rebase(-loops.G).variables == loops.variables
+    assert Loops(circuit, dict(zip(loops.names, ({"J1": 1, "J2": -1}, {"C1": 1, "J1": -1}))),
+                 {"k": 0, "cb": 0}).variables == ()
+
+
+def test_automatic_symbols_quantize_and_export():
+    from circuit_quantization import quantize, scqubits_yaml
+    circuit = Circuit([Branch("J1", 1, 0, energy_symbols=True), Branch("L1", 1, 0, energy_symbols=True)], ground=0)
+    loops = Loops(circuit, fundamental_cycles(circuit), {"L1": 0})
+    ec, ej, el = circuit.variables
+    result = quantize(circuit, loops)
+    phase, charge = result.ham.varphi[0], result.ham.n[0]
+    assert sym.expand(result.H - (4 * ec * charge**2 + el * phase**2 / 2 - ej * sym.cos(phase))) == 0
+    assert "EJ_0 = 8" in scqubits_yaml(circuit, subs={ec: 1, ej: 8, el: 2})
+
+
 def test_source_rules():
     with pytest.raises(ValueError, match="connect to ground"):
         Circuit([Branch("J", 1, 0, C=C, EJ=EJ), Branch("V", 1, 2, V=1)], ground=0)
     with pytest.raises(ValueError, match="Only capacitors"):
         Circuit([Branch("J", 1, 2, C=C, EJ=EJ), Branch("V", 0, 2, V=1)], ground=0)
+
+
+@pytest.mark.parametrize("ground", [0, 1])
+def test_disconnected_branches_are_rejected(ground):
+    with pytest.raises(ValueError, match="connected graph"):
+        Circuit([Branch("C1", 1, 2), Branch("C2", 3, 4)], ground=ground)
+
+
+def test_empty_circuit_is_rejected():
+    with pytest.raises(ValueError, match="nonempty connected graph"):
+        Circuit([], ground=0)
 
 
 def test_ordering_and_incidence_match_notes():
@@ -125,3 +190,43 @@ def test_rebase_requires_one_name_per_row():
     loops = Loops(harmonium(), HARMONIUM_CYCLES, {"cb": 0})
     with pytest.raises(ValueError, match="one name per row"):
         loops.rebase(loops.G, names=("a", "b"))
+
+
+def test_spanning_trees_harmonium_count_and_cycle_constraints():
+    import networkx as nx
+    from circuit_quantization import spanning_trees
+    circuit = harmonium()
+    trees = list(spanning_trees(circuit))
+    graph = nx.MultiGraph((b.tail, b.head) for b in circuit.branches)
+    # Independent count by the matrix-tree theorem (parallel edges count separately).
+    laplacian = sym.Matrix(nx.laplacian_matrix(graph).toarray())
+    assert len(trees) == laplacian[:-1, :-1].det() == 20
+    assert len(set(trees)) == len(trees)
+    assert trees == list(spanning_trees(circuit))
+    for tree in trees:
+        cycles = Loops(circuit, fundamental_cycles(circuit, tree))
+        assert cycles.G * incidence(circuit).T == sym.zeros(3, 5)
+
+
+def test_spanning_forests_preserve_parallel_branch_choices_and_isolated_ground():
+    from circuit_quantization import spanning_trees
+    circuit = Circuit([
+        Branch("a", 1, 2, C=1), Branch("b", 2, 1, C=1),
+        Branch("c", 2, 3, C=1), Branch("d", 2, 3, C=1),
+    ], ground=0)
+    assert list(spanning_trees(circuit)) == [("a", "c"), ("a", "d"), ("b", "c"), ("b", "d")]
+    for tree in spanning_trees(circuit):
+        assert Loops(circuit, fundamental_cycles(circuit, tree)).G.shape == (2, 4)
+
+
+def test_different_spanning_trees_can_give_the_same_cycle_matrix():
+    from circuit_quantization import spanning_trees
+    circuit = Circuit([
+        Branch("a", 0, 1, C=1), Branch("b", 1, 2, C=1), Branch("c", 2, 0, C=1),
+    ], ground=0)
+    trees = list(spanning_trees(circuit))
+    assert len(trees) == 3
+    for tree in trees:
+        cycles = fundamental_cycles(circuit, tree)
+        assert Loops(circuit, cycles).G == sym.Matrix([[1, 1, 1]])
+        assert set(tree) == set(circuit.branch_names) - set(cycles)

@@ -9,7 +9,7 @@ from .circuit import Circuit, Loops
 from .flux import irrotational_B
 from .hamiltonian import Hamiltonian, hamiltonian
 from .lagrangian import Lagrangian, lagrangian
-from .modes import Coordinates, check_basis, check_coordinates, decouple, infer_types, mode_basis
+from .modes import Coordinates, check_basis, check_coordinates, decouple, mode_basis, transform
 
 
 @dataclass(frozen=True)
@@ -25,39 +25,21 @@ class Result:
     def H(self):
         return self.ham.H
 
-    def branch_index(self, name):
-        return self.circuit.branch_names.index(name)
-
-    def __getattr__(self, name):
-        # Expose every named matrix (res.Z, res.C_int, res.E_C, ...) directly.
-        for part in ("lag", "coords", "ham", "loops"):
-            obj = object.__getattribute__(self, part)
-            if hasattr(obj, name):
-                return getattr(obj, name)
-        raise AttributeError(name)
-
     def _repr_latex_(self):
         counts = ", ".join(f"{t}: {k}" for t, k in Counter(self.coords.types).items())
-        return f"$\\displaystyle H/h = {sym.latex(self.H)}$ GHz  (modes {counts})"
+        return f"$\\displaystyle H_{{\\mathrm{{GHz}}}} = {sym.latex(self.H)}$  (modes {counts})"
 
 
-def quantize(circuit, loops, Z_full=None, types=None, coords=None):
-    """Quantize with the automatic basis, a given square Z_full, or given coordinates.
-
-    Z_full need not be decoupled from the non-dynamical modes; its types are
-    inferred when not given.
-    """
+def quantize(circuit, loops, Z_full=None, types=None, *, simplify=False):
+    """Quantize with an automatic or explicit basis; optionally simplify the final H."""
     lag = lagrangian(circuit)
-    if coords is None:
-        if Z_full is None:
-            if types is not None:
-                raise ValueError("types requires Z_full")
-            Z_full, types = mode_basis(lag)
-        elif types is None:
-            types = infer_types(lag, Z_full)
-        check_basis(lag, Z_full, types)
-        coords = decouple(lag, Z_full, types)
-        check_coordinates(lag, coords)
+    if Z_full is None:
+        Z_full, types = mode_basis(lag)
+    elif types is None:
+        raise ValueError("Z_full and types must be supplied together")
+    check_basis(lag, Z_full, types)
+    coords = decouple(lag, Z_full, types)
+    check_coordinates(lag, coords)
     B = irrotational_B(lag, coords, loops)
-    ham = hamiltonian(lag, coords, loops, B, circuit.t)
+    ham = hamiltonian(lag, coords, loops, B, circuit.t, simplify=simplify)
     return Result(circuit=circuit, loops=loops, lag=lag, coords=coords, B=B, ham=ham)

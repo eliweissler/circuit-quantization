@@ -13,6 +13,8 @@ authors = [{name = "Eli Weissler"}]
 dependencies = ["networkx>=3.4", "sympy>=1.13"]
 
 [project.optional-dependencies]
+scqubits = ["scqubits>=4.2"]
+draw = ["schemdraw>=0.19", "numpy>=1.26", "matplotlib>=3.8"]
 test = ["pytest>=8.3", "scqubits>=4.2"]
 
 [tool.setuptools.packages.find]

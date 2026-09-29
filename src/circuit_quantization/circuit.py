@@ -2,12 +2,24 @@
 
 import re
 from dataclasses import dataclass, field
+from itertools import combinations
 
 import networkx as nx
 import sympy as sym
 
+from .units import Phi0, e, ghz_to_farad, ghz_to_henry, h, hbar, h_GHz
+
 # Branch order of eq:Omega_columns.
 TYPES = ("C", "J", "L", "V")
+
+
+def _variables(values):
+    """Unique free symbols in value order, excluding physical constants."""
+    constants = {e, h, hbar, Phi0, h_GHz}
+    return tuple(dict.fromkeys(
+        symbol for value in values if value is not None
+        for symbol in sorted(sym.sympify(value).free_symbols - constants, key=sym.default_sort_key)
+    ))
 
 
 @dataclass(frozen=True)
@@ -19,17 +31,43 @@ class Branch:
     V is the source node's potential relative to ground.
     Floats are converted to exact rationals, so identities the notes prove
     (G B = I, vanishing cross blocks) hold exactly.
+
+    With no values supplied, infer C/J/L/V from the name's first letter and
+    generate symbols: C1 -> C_1, L1 -> L_1, J1 -> (C_J1, E_J1), V1 -> V_1.
+    Omitted junction C is generated even when EJ is supplied. Inductor C defaults
+    to zero. energy_symbols=True generates E_C1, E_CJ1, E_L1 instead, converting
+    these GHz energies to SI internally. Explicit values always retain the
+    units above. All generated symbols are positive except real-valued voltages.
     """
 
     name: str
     tail: object
     head: object
-    C: object = 0
+    C: object = None
     L: object = None
     EJ: object = None
     V: object = None
+    energy_symbols: bool = field(default=False, kw_only=True)
 
     def __post_init__(self):
+        name = self.name[0] + self.name[1:].lstrip("_") if self.name else ""
+
+        def parameter(kind):
+            label = ("C" + name) if kind == "C" and name[:1] != "C" else name
+            energy = kind == "EJ" or (self.energy_symbols and kind in ("C", "L"))
+            label = f"E_{label}" if energy else label[:1] + ("_" + label[1:] if label[1:] else "")
+            symbol = sym.Symbol(label, **({"real": True} if kind == "V" else {"positive": True}))
+            if self.energy_symbols and kind in ("C", "L"):
+                return (ghz_to_farad if kind == "C" else ghz_to_henry)(symbol)
+            return symbol
+
+        if all(value is None for value in (self.C, self.L, self.EJ, self.V)):
+            if name[:1] not in TYPES:
+                raise ValueError("A branch without values needs a name starting with C, J, L, or V")
+            attr = {"C": "C", "J": "EJ", "L": "L", "V": "V"}[name[0]]
+            object.__setattr__(self, attr, parameter(attr))
+        if self.C is None:
+            object.__setattr__(self, "C", parameter("C") if self.type in ("C", "J") else 0)
         for attr in ("C", "L", "EJ", "V"):
             value = getattr(self, attr)
             if value is not None:
@@ -48,6 +86,11 @@ class Branch:
             value = getattr(self, attr)
             if value is not None and value.is_positive is False:
                 raise ValueError(f"Branch {self.name!r}: {attr} must be positive")
+
+    @property
+    def variables(self):
+        """Parameter symbols in C, L, EJ, V order; numeric values contribute none."""
+        return _variables((self.C, self.L, self.EJ, self.V))
 
     @property
     def type(self):
@@ -72,7 +115,10 @@ def _ordered(nodes):
 
 @dataclass(frozen=True)
 class Circuit:
-    """Branches plus a ground node, with nodes ordered int | gnd | src (Sec I.B)."""
+    """Connected branches plus a reference ground, which may be isolated for a floating circuit.
+
+    Nodes are ordered int | gnd | src (Sec I.B).
+    """
 
     branches: tuple
     ground: object
@@ -80,6 +126,8 @@ class Circuit:
 
     def __post_init__(self):
         branches = tuple(self.branches)
+        if not branches or not nx.is_connected(nx.Graph((b.tail, b.head) for b in branches)):
+            raise ValueError("Circuit branches must form a nonempty connected graph")
         names = [b.name for b in branches]
         if len(set(names)) != len(names):
             raise ValueError("Branch names must be unique")
@@ -115,6 +163,11 @@ class Circuit:
     def branch_names(self):
         return tuple(b.name for b in self.branches)
 
+    @property
+    def variables(self):
+        """Unique parameter symbols in branch order, then each branch's value order."""
+        return tuple(dict.fromkeys(v for b in self.branches for v in b.variables))
+
 
 def incidence(circuit):
     """Omega: +1 at each branch's tail and -1 at its head (Sec I.B)."""
@@ -131,6 +184,37 @@ def _graph(circuit):
     graph.add_nodes_from(circuit.nodes)
     graph.add_edges_from((b.tail, b.head) for b in circuit.branches)
     return graph
+
+
+def spanning_trees(circuit):
+    """Yield tuples of branch names, in deterministic circuit order.
+
+    For floating circuits, include the isolated reference ground as a singleton
+    component of the spanning forest. Parallel branches remain distinct choices.
+    Exhaustive subset enumeration is intended for small circuits.
+    """
+    size = len(circuit.nodes) - nx.number_connected_components(_graph(circuit))
+    for branches in combinations(circuit.branches, size):
+        forest = nx.utils.UnionFind(circuit.nodes)
+        for b in branches:
+            if forest[b.tail] == forest[b.head]:
+                break
+            forest.union(b.tail, b.head)
+        else:
+            yield tuple(b.name for b in branches)
+
+
+def cycle_bases(circuit, *, primitive=True):
+    """Planned enumeration of bases made from simple loops; not implemented.
+
+    Will yield cycle dictionaries accepted by Loops, with canonical row order
+    and orientation. Parallel branch identities and two-branch loops must be
+    preserved. primitive=True will require an integer cycle-lattice basis;
+    False will require only a full-rank real cycle-space basis.
+    Non-fundamental bases have no associated tree or closure-branch labels.
+    Use spanning_trees and fundamental_cycles for closure-labelled candidates.
+    """
+    raise NotImplementedError("Enumeration of simple-loop cycle bases is not implemented")
 
 
 def default_tree(circuit):
@@ -220,6 +304,11 @@ class Loops:
             len(self.names), 1,
             [fluxes.get(loop, sym.Symbol(f"Phi_{loop}", real=True)) for loop in self.names],
         )
+
+    @property
+    def variables(self):
+        """Unique external-flux symbols in loop order, including explicit expressions."""
+        return _variables(self.Phi_ext)
 
     def rebase(self, G_new, names=None):
         """Re-express the same fluxes in another cycle basis G_new = T G (eq:G_basis_change)."""
