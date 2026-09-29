@@ -319,3 +319,11 @@ def test_serial_decoupling_updates_remaining_columns_and_skips_null_pivots(form,
     retained = _decouple_column(Z[:, 0], Z[:, 1:], form)
     assert retained == expected
     assert zero(retained.T * form * Z[:, 1:])
+
+
+def test_check_basis_recognises_a_disguised_zero_in_a_symbolic_column():
+    # a/(a+b) + b/(a+b) - 1 is zero, but only after cancellation.
+    a, b = pos("a b")
+    Z = RHOMBUS_Z.copy()
+    Z[:, 3] = Z[:, 3] + (a / (a + b) + b / (a + b) - 1) * sym.Matrix([1, 0, 0, 0])
+    check_basis(lagrangian(rhombus()), Z, ("c", "c", "c", "fr"))

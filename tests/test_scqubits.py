@@ -2,7 +2,11 @@ import numpy as np
 import pytest
 import sympy as sym
 
-from circuit_quantization import Branch, Circuit, lagrangian, mode_basis
+from circuit_quantization import (
+    Branch, Circuit, Loops, check_basis, check_coordinates, decouple, fundamental_cycles, irrotational_B,
+    lagrangian, mode_basis, to_scqubits,
+)
+from circuits import random_circuit
 
 scq = pytest.importorskip("scqubits")
 
@@ -38,3 +42,36 @@ def test_transmon_molecule_matches_scqubits():
     theirs_c = sc_Z[:, [i - 1 for i in sc_modes["periodic"]]]
     # Compact columns may differ by discarded free and global directions.
     assert same_span(sym.Matrix.hstack(ours_c, ours_nd), sym.Matrix.hstack(theirs_c, theirs_nd))
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_random_circuits_match_scqubits_modes_and_flux_allocation(seed):
+    # scqubits imposes the irrotational condition on every node (D = 0); we impose it
+    # on the retained modes (Z^T D = 0).  Sec V.D.2: the two can differ only by a
+    # node-flux shift along discarded directions, which no junction sees, which
+    # reaches inductors only along frozen directions, and which vanishes without
+    # non-dynamical modes.
+    circuit = random_circuit(seed)
+    lag = lagrangian(circuit)
+    Z, types = mode_basis(lag)
+    if not set(types) & {"c", "e", "h"}:
+        pytest.skip("no dynamical modes")
+    check_basis(lag, Z, types)
+    coords = decouple(lag, Z, types)
+    check_coordinates(lag, coords)
+    loops = Loops(circuit, fundamental_cycles(circuit))
+    B = irrotational_B(lag, coords, loops)
+
+    theirs = to_scqubits(circuit, symbolic=True, use_dynamic_flux_grouping=True)
+    counts = {k: len(v) for k, v in theirs.var_categories.items()}
+    assert counts == {"periodic": types.count("c"), "extended": types.count("e") + types.count("h"),
+                      "free": types.count("fr"), "frozen": types.count("fz"), "sigma": types.count("cy")}
+    offsets = theirs._time_dependent_flux_distribution()
+    B_theirs = sym.Matrix([[sym.sympify(x).coeff(f) for f in theirs.external_fluxes] for x in offsets])
+    B_theirs = B_theirs * (loops.G * B_theirs).inv()  # the same allocation in our loop basis
+
+    compared = {"J"} | ({"L"} if "fz" not in types else set()) | ({"C"} if len(coords.types) == len(types) else set())
+    for k, branch in enumerate(circuit.branches):
+        if branch.type in compared:
+            for j in range(B.cols):
+                assert abs(float(B[k, j] - B_theirs[k, j])) < 1e-8, (branch.name, j)

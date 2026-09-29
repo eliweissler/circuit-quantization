@@ -120,12 +120,13 @@ def parallel(*branches):
     return Circuit(list(branches), ground=0)
 
 
-def coupled_zero_pis():
-    """Two symmetric zero-pi qubits with a pure n_theta1 n_theta2 coupler.
+def coupled_zero_pis(scheme="a"):
+    """Two symmetric zero-pi qubits coupled through capacitors C_c.
 
-    Circuit (a) of the zero-pi two-qubit gate paper: qubit nodes 1-4 and 5-8, each
-    with C_0 to ground (node 0); nodes 1, 4, 5, 8 couple to node 10 and nodes
-    2, 3, 6, 7 to node 9 through C_c.
+    Circuits of the zero-pi two-qubit gate paper: qubit nodes 1-4 and 5-8, each
+    with C_0 to ground (node 0).  Scheme (a), a pure n_theta1 n_theta2 coupler:
+    nodes 1, 4, 5, 8 couple to node 10 and nodes 2, 3, 6, 7 to node 9.
+    Scheme (b), the mixed coupler: node pairs (1, 8), (2, 7), (3, 6), (4, 5).
     """
     CJ, C, L, C0, Cc, EJ = pos("C_J C L C_0 C_c E_J")
     branches = []
@@ -136,8 +137,11 @@ def coupled_zero_pis():
             Branch(f"C{q}a", a, c, C=C), Branch(f"C{q}b", b, d, C=C),
             *(Branch(f"C0_{n}", n, 0, C=C0) for n in (a, b, c, d)),
         ]
-    branches += [Branch(f"Cc_{n}", n, 10, C=Cc) for n in (1, 4, 5, 8)]
-    branches += [Branch(f"Cc_{n}", n, 9, C=Cc) for n in (2, 3, 6, 7)]
+    if scheme == "a":
+        branches += [Branch(f"Cc_{n}", n, 10, C=Cc) for n in (1, 4, 5, 8)]
+        branches += [Branch(f"Cc_{n}", n, 9, C=Cc) for n in (2, 3, 6, 7)]
+    else:
+        branches += [Branch(f"Cc_{a}{b}", a, b, C=Cc) for a, b in ((1, 8), (2, 7), (3, 6), (4, 5))]
     return Circuit(branches, ground=0)
 
 
@@ -153,3 +157,30 @@ def _coupled_zero_pi_Z():
 
 COUPLED_ZERO_PI_Z = _coupled_zero_pi_Z()
 COUPLED_ZERO_PI_TYPES = ("c", "e", "h", "fr", "c", "e", "h", "fr", "fr", "fr")
+
+
+def random_circuit(seed, nodes=4, extra=3):
+    """A grounded random circuit with small rational element values.
+
+    A random spanning tree ties every node to ground, then `extra` random
+    branches are added. Inductors carry no capacitance, so a node reached only
+    through inductors is frozen.
+    """
+    import random
+
+    rng = random.Random(seed)
+    value = lambda: sym.Rational(rng.randint(1, 9), rng.randint(1, 9))  # noqa: E731
+    branches = []
+    for node in range(1, nodes + 1):
+        edge = (node, rng.randrange(node))
+        branches.append(_random_branch(rng, value, len(branches), edge))
+    for _ in range(extra):
+        branches.append(_random_branch(rng, value, len(branches), tuple(rng.sample(range(nodes + 1), 2))))
+    return Circuit(branches, ground=0)
+
+
+def _random_branch(rng, value, index, edge):
+    kind = rng.choice("CJL")
+    if kind == "L":
+        return Branch(f"L{index}", *edge, L=value())
+    return Branch(f"{kind}{index}", *edge, C=value(), EJ=value() if kind == "J" else None)
