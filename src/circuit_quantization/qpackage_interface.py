@@ -48,6 +48,12 @@ def scqubits_yaml(circuit, *, subs=None, node_order=None):
     automatically. Ground maps to 0; node_order (default internal_nodes) maps to
     1, 2, ... . Parameter names EJ_i, EC_i, EL_i use circuit.branches indices.
     Junction C is included in JJ; inductor C becomes a parallel capacitor.
+
+    :param circuit: Circuit without voltage-source branches.
+    :param subs: Symbol-to-numeric-value mapping; physical constants are substituted automatically.
+    :param node_order: Complete internal-node order; None uses circuit.internal_nodes.
+    :returns: YAML string with energy parameters in GHz.
+    :raises ValueError: Unsupported sources, unresolved symbols, invalid values, or node order.
     """
     return _scqubits_input(circuit, subs, node_order)[0]
 
@@ -67,6 +73,20 @@ def to_scqubits(circuit, *, subs=None, node_order=None, symbolic=False,
     trunc_num optionally enables one subsystem per mode, with scalar or list
     truncations. These numerical options cannot be used with symbolic=True.
     kwargs are forwarded to Circuit or SymbolicCircuit.from_yaml.
+
+    :param circuit: Circuit to export, without voltage-source branches.
+    :param subs: Numeric substitutions for all free element parameters.
+    :param node_order: Complete internal-node order; None uses circuit.internal_nodes.
+    :param bool symbolic: Return SymbolicCircuit instead of numerical Circuit.
+    :param transformation_matrix: Custom transformation, with rows in node_order.
+    :param closure_branches: Complete ordered list of closure-branch labels;
+        None uses scqubits defaults. Does not transfer this package's loop fluxes.
+    :param cutoff: Scalar cutoff or dict keyed by 1-based mode indices.
+    :param trunc_num: Scalar or list of subsystem truncation dimensions;
+        None leaves hierarchical diagonalization unconfigured.
+    :param kwargs: Additional keyword arguments forwarded to the scqubits constructor.
+    :returns: scqubits Circuit or SymbolicCircuit.
+    :raises ValueError: Invalid export parameters or unsupported circuit features.
     """
     import numpy as np
     import scqubits as scq

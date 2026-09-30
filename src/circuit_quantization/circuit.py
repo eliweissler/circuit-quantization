@@ -38,6 +38,19 @@ class Branch:
     to zero. energy_symbols=True generates E_C1, E_CJ1, E_L1 instead, converting
     these GHz energies to SI internally. Explicit values always retain the
     units above. All generated symbols are positive except real-valued voltages.
+
+    :param str name: Unique branch label. With all values omitted, its first letter
+        selects C, J, L, or V and its suffix names the generated symbols.
+    :param tail: Hashable label of the positive-incidence endpoint.
+    :param head: Hashable label of the negative-incidence endpoint.
+    :param C: Capacitance in farads. Omitted junction capacitance is generated;
+        omitted inductor/source capacitance is zero.
+    :param L: Inductance in henries, or None if not an inductor.
+    :param EJ: Josephson energy E/h in GHz, or None if not a junction.
+    :param V: Source-node voltage relative to ground, in volts, or None.
+    :param bool energy_symbols: Generate capacitance/inductance energy symbols in
+        GHz and convert internally to SI. Does not change explicit input units.
+    :raises ValueError: Invalid element values, incompatible types, or a self-loop.
     """
 
     name: str
@@ -118,6 +131,11 @@ class Circuit:
     """Connected branches plus a reference ground, which may be isolated for a floating circuit.
 
     Nodes are ordered int | gnd | src (Sec I.B).
+
+    :param branches: Iterable of Branch objects forming one connected graph.
+    :param ground: Reference-node label; may be absent from branches for a floating circuit.
+    :param t: SymPy time symbol used for time-dependent fluxes and voltages.
+    :raises ValueError: Empty/disconnected graph, duplicate labels, or invalid source connections.
     """
 
     branches: tuple
@@ -170,7 +188,11 @@ class Circuit:
 
 
 def incidence(circuit):
-    """Omega: +1 at each branch's tail and -1 at its head (Sec I.B)."""
+    """Omega: +1 at each branch's tail and -1 at its head (Sec I.B).
+
+    :param circuit: Circuit whose ordered nodes and branches define the matrix.
+    :returns: Immutable integer matrix with node rows and branch columns.
+    """
     row = {node: i for i, node in enumerate(circuit.nodes)}
     Omega = sym.zeros(len(circuit.nodes), len(circuit.branches))
     for k, b in enumerate(circuit.branches):
@@ -192,6 +214,9 @@ def spanning_trees(circuit):
     For floating circuits, include the isolated reference ground as a singleton
     component of the spanning forest. Parallel branches remain distinct choices.
     Exhaustive subset enumeration is intended for small circuits.
+
+    :param circuit: Circuit to enumerate. Parallel branches remain distinct.
+    :yields: Tuples of branch labels defining spanning trees; isolated ground is retained.
     """
     size = len(circuit.nodes) - nx.number_connected_components(_graph(circuit))
     for branches in combinations(circuit.branches, size):
@@ -237,6 +262,13 @@ def fundamental_cycles(circuit, tree=None):
 
     Returns {closure branch name: {branch name: +1 or -1}}, superconducting
     cycles first (eq:G_blocks).
+
+    :param circuit: Circuit defining branch orientations and order.
+    :param tree: Complete iterable of branch labels forming a spanning tree.
+        None selects a deterministic tree, prioritizing J/L over C/V branches.
+    :returns: Dict mapping each closure branch to a signed branch dictionary.
+        Closure coefficients are +1; superconducting cycles precede broken cycles.
+    :raises ValueError: Unknown labels or a selection that is not a spanning tree.
     """
     names = circuit.branch_names
     tree = default_tree(circuit) if tree is None else list(tree)
@@ -272,38 +304,101 @@ class Loops:
 
     Every cycle not given a value in ``fluxes`` gets a visible symbol Phi_<name> [Wb].
     Pass 0 explicitly for a cycle that encloses no flux.
+    branch_dict maps loop names to tuples of branch labels. Signs are inferred
+    from incidence, with the first listed branch positive. Explicit signed
+    dictionaries are also accepted, including for rebasing existing fluxes.
     """
 
-    def __init__(self, circuit, cycles, fluxes=None):
+    def __init__(self, circuit, branch_dict, fluxes=None):
+        """Construct an explicit complete cycle basis and its external fluxes.
+
+        :param circuit: Circuit defining the branch labels and orientations.
+        :param branch_dict: Complete mapping of loop names to branch-label
+            tuples. Incidence fixes relative signs; the first label is +1.
+            Alternatively, supply signed branch dictionaries with values +/-1.
+        :param fluxes: Optional mapping from loop names to flux expressions in
+            webers. Missing entries generate real Phi_<name> symbols; use 0
+            explicitly for zero flux. Keys must belong to branch_dict.
+        :raises ValueError: Unknown labels, invalid/incomplete cycles, dependent
+            rows, or fluxes for unknown loops.
+        """
         fluxes = dict(fluxes or {})
         names = circuit.branch_names
-        if set(fluxes) - set(cycles):
-            raise ValueError(f"Fluxes for unknown cycles: {sorted(set(fluxes) - set(cycles))}")
+        Omega = incidence(circuit)
+        if set(fluxes) - set(branch_dict):
+            raise ValueError(f"Fluxes for unknown branch_dict: {sorted(set(fluxes) - set(branch_dict))}")
         rows = []
-        for loop, cycle in cycles.items():
+        for loop, cycle in branch_dict.items():
             if set(cycle) - set(names):
                 raise ValueError(f"Cycle {loop!r} uses unknown branches: {sorted(set(cycle) - set(names))}")
+            if not isinstance(cycle, dict):
+                if not isinstance(cycle, (tuple, list)) or not cycle or len(set(cycle)) != len(cycle):
+                    raise ValueError(f"Cycle {loop!r} needs distinct branch labels in a nonempty tuple")
+                basis = Omega[:, [names.index(name) for name in cycle]].nullspace()
+                if len(basis) != 1 or any(x == 0 for x in basis[0]):
+                    raise ValueError(f"Cycle {loop!r} must describe a single closed loop")
+                signs = basis[0] / basis[0][0]
+                cycle = dict(zip(cycle, signs))
             if any(value not in (-1, 0, 1) for value in cycle.values()):
                 # G in {0, +1, -1}: a flux is only meaningful through a physical loop (Sec I.C).
                 raise ValueError(f"Cycle {loop!r} is not a physical loop: coefficients must be 0, +1, or -1")
             rows.append([cycle.get(name, 0) for name in names])
         G = sym.Matrix(rows) if rows else sym.zeros(0, len(names))
-        Omega = incidence(circuit)
-        for loop, row in zip(cycles, rows):
+        for loop, row in zip(branch_dict, rows):
             if any(sym.Matrix([row]) * Omega.T):
                 raise ValueError(f"Cycle {loop!r} is not a graph cycle (eq:G_OmegaT)")
         if G.rank() < G.rows:
-            raise ValueError("Cycles are linearly dependent")
+            raise ValueError("branch_dict are linearly dependent")
         N_ell = len(names) - Omega.rank()
         if G.rows < N_ell:
             raise ValueError(f"{N_ell - G.rows} cycle(s) missing: a complete basis has {N_ell}")
         self.circuit = circuit
-        self.names = tuple(cycles)
+        self.names = tuple(branch_dict)
         self.G = sym.ImmutableMatrix(G)
+        # Put a positive branch first so this tuple representation preserves G.
+        self.branch_dict = {
+            loop: (tuple(branch_dict[loop]) if not isinstance(branch_dict[loop], dict) else
+                   tuple(names[k] for k in sorted(
+                       (k for k, value in enumerate(row) if value), key=lambda k: bool(row[k] < 0)
+                   ))) for loop, row in zip(self.names, rows)
+        }
         self.Phi_ext = sym.ImmutableMatrix(
             len(self.names), 1,
             [fluxes.get(loop, sym.Symbol(f"Phi_{loop}", real=True)) for loop in self.names],
         )
+
+    @classmethod
+    def from_circuit(cls, circuit, *, zero_capacitive=False):
+        """Generate and print fundamental cycles from the default spanning tree.
+
+        The deterministic tree prioritizes J/L over C/V branches in circuit
+        order. Each loop is named after its closure branch, whose sign is +1.
+        Prints signed branches, classification, and flux, one loop per line.
+        For custom cycles or flux values, use :class:`Loops` directly; for a
+        custom tree, obtain its cycles with :func:`fundamental_cycles` first.
+
+        :param circuit: Circuit whose fundamental cycles are generated.
+        :param bool zero_capacitive: If True, set every loop containing a C or V
+            branch to zero flux. Otherwise generate a real Phi_<name> symbol
+            for every loop. Junction/inductor capacitance does not count as
+            a capacitively broken branch. Default False.
+        :returns: Loops with generated branch_dict, G, Phi_ext, and variables.
+        """
+        cycles = fundamental_cycles(circuit)
+        branch_dict = {closure: (closure, *(name for name in cycle if name != closure))
+                       for closure, cycle in cycles.items()}
+        capacitive = {b.name for b in circuit.branches if b.type in ("C", "V")}
+        broken = {loop for loop, labels in branch_dict.items() if capacitive.intersection(labels)}
+        values = dict.fromkeys(broken, 0) if zero_capacitive else {}
+        result = cls(circuit, branch_dict, values)
+        for loop, flux in zip(result.names, result.Phi_ext):
+            elements = " ".join(f"{'+' if cycles[loop][name] == 1 else '-'}{name}"
+                                for name in branch_dict[loop])
+            kind = "capacitively broken" if loop in broken else "superconducting"
+            print(f"{loop}: {elements} [{kind}]; flux = {flux}")
+        if not branch_dict:
+            print("No loops.")
+        return result
 
     @property
     def variables(self):
@@ -311,7 +406,14 @@ class Loops:
         return _variables(self.Phi_ext)
 
     def rebase(self, G_new, names=None):
-        """Re-express the same fluxes in another cycle basis G_new = T G (eq:G_basis_change)."""
+        """Re-express the same fluxes in another cycle basis G_new = T G (eq:G_basis_change).
+
+        :param G_new: Complete cycle matrix in the same branch-column order as G.
+            Must be related to G by an integer unimodular transformation.
+        :param names: One unique label per new row; None generates loop_1, loop_2, ... .
+        :returns: New Loops with transformed fluxes, preserving their physical meaning.
+        :raises ValueError: Invalid basis, non-unimodular transformation, or invalid names.
+        """
         G_new = sym.Matrix(G_new)
         G = sym.Matrix(self.G)
         T = G_new * G.T * (G * G.T).inv()

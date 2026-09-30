@@ -89,7 +89,11 @@ def _normalize_compact(Z_c, omega_J_int):
 
 
 def mode_basis(lag):
-    """Square Z = (Z^c Z^e Z^h Z^fr Z^fz Z^cy) of eq:Z_mode_blocks and its column types."""
+    """Square Z = (Z^c Z^e Z^h Z^fr Z^fz Z^cy) of eq:Z_mode_blocks and its column types.
+
+    :param lag: Node Lagrangian matrices.
+    :returns: Pair (Z_full, types), ordered c, e, h, fr, fz, cy.
+    """
     sub = subspaces(lag)
     sub["c"] = _normalize_compact(sub["c"], lag.omega_J_int)
     Z = sym.Matrix.hstack(*(sub[t] for t in TYPES))
@@ -110,6 +114,9 @@ def mode_dimensions(lag):
     These differ from the column types of a particular Z: the compact and
     non-dynamical counts are fixed, but the harmonic count is only a maximum,
     since a harmonic direction may sit inside extended columns (eq:S1_structure).
+
+    :param lag: Node Lagrangian matrices.
+    :returns: Dict of intrinsic dimensions keyed by c, e, h, fr, fz, cy.
     """
     sub = subspaces(lag)
     return {t: sub[t].cols for t in TYPES}
@@ -208,6 +215,11 @@ def decouple(lag, Z_full, types):
     Eliminate free directions in C and frozen directions in L* serially
     (eq:decouple_final, eq:decouple_final_L), updating the remaining columns.
     Cyclic directions are discarded; no discarded-sector matrix is inverted.
+
+    :param lag: Node Lagrangian matrices.
+    :param Z_full: Full square node-to-coordinate basis.
+    :param types: Mode label for each basis column.
+    :returns: Coordinates containing the retained dynamical columns and transformed matrices.
     """
     Z = sym.Matrix(Z_full)
     sectors = [
@@ -241,6 +253,11 @@ def residual_freedom(coords, keep_harmonic=True):
     keep_harmonic=True gives S_{1,a}; False gives S_{1,b}, which lets harmonic
     columns acquire extended components. S_cc must also lie in GL(N_c, Z)
     (eq:Scc_unimodular); transform() checks that once values are chosen.
+
+    :param coords: Retained Coordinates defining the current mode order.
+    :param bool keep_harmonic: Preserve harmonic columns when True; allow
+        extended/harmonic mixing when False.
+    :returns: Symbolic matrix of allowed residual mixing parameters.
     """
     allowed = _S1a if keep_harmonic else _S1b
     types = coords.types
@@ -255,6 +272,12 @@ def transform(lag, coords, S1):
 
     The allowed mixing follows eq:S1_structure and eq:Scc_unimodular;
     cancellations can restore harmonic axes inside the extended block.
+
+    :param lag: Node Lagrangian for the same circuit as coords.
+    :param coords: Current retained coordinates.
+    :param S1: Invertible matrix satisfying residual mixing and compact-period constraints.
+    :returns: New Coordinates with node matrix coords.Z * S1.
+    :raises ValueError: Invalid dimensions, disallowed mixing, or nonprimitive compact periods.
     """
     S = sym.Matrix(S1)
     types = coords.types

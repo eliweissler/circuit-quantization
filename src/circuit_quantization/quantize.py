@@ -26,11 +26,23 @@ class Result:
         return self.ham.H
 
     def residual_freedom(self, keep_harmonic=True):
-        """Symbolic S_1 allowed on these coordinates, in coords.types order (eq:S1_structure)."""
+        """Symbolic S_1 allowed on these coordinates, in coords.types order (eq:S1_structure).
+
+        :param bool keep_harmonic: Preserve harmonic columns when True; allow
+            extended/harmonic mixing when False.
+        :returns: Symbolic residual transformation matrix in the current coordinate order.
+        """
         return residual_freedom(self.coords, keep_harmonic)
 
     def transform(self, S1, *, simplify=False):
-        """The same circuit and loops quantized in coordinates Z S_1 (Sec III.C)."""
+        """The same circuit and loops quantized in coordinates Z S_1 (Sec III.C).
+
+        :param S1: Invertible residual transformation with new node matrix Z * S1.
+            Must obey allowed mode mixing and compact-period constraints.
+        :param bool simplify: Simplify the rebuilt Hamiltonian.
+        :returns: New Result; the original is unchanged.
+        :raises ValueError: Disallowed mixing or an invalid transformation.
+        """
         return _result(self.circuit, self.loops, self.lag, transform(self.lag, self.coords, S1), simplify)
 
     def _repr_latex_(self):
@@ -39,7 +51,17 @@ class Result:
 
 
 def quantize(circuit, loops, Z_full=None, types=None, *, simplify=False):
-    """Quantize with an automatic or explicit basis; optionally simplify the final H."""
+    """Quantize with an automatic or explicit basis; optionally simplify the final H.
+
+    :param circuit: Circuit with SI element values and junction energies in GHz.
+    :param loops: Complete Loops basis belonging to this circuit.
+    :param Z_full: Square node-to-coordinate matrix, including discarded modes;
+        rows follow circuit.internal_nodes. Omit together with types for an automatic basis.
+    :param types: Column mode labels c, e, h, fr, fz, cy. Required with Z_full.
+    :param bool simplify: Factor coefficients and simplify trigonometric terms in H.
+    :returns: Result containing lag, coords, B, ham, and H in GHz.
+    :raises ValueError: Mismatched circuit/loops or an invalid coordinate basis.
+    """
     if loops.circuit != circuit:
         raise ValueError("loops must belong to the circuit being quantized")
     lag = lagrangian(circuit)

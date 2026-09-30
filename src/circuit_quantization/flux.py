@@ -8,6 +8,11 @@ def irrotational_B(lag, coords, loops):
 
     Evaluated as B = G^+ - Omega_int^T Z X with X = C~^{-1} Z^T Omega_int C_b G^+,
     so the only rational-function matrix built is the small N_d x N_ell block X.
+
+    :param lag: Node Lagrangian matrices.
+    :param coords: Decoupled retained coordinates.
+    :param loops: Complete cycle basis and branch ordering for the circuit.
+    :returns: Branch-by-loop flux assignment matrix B, satisfying G * B = I.
     """
     G = sym.Matrix(loops.G)
     N_b = lag.Omega.cols

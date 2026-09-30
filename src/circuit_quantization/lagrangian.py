@@ -25,6 +25,9 @@ class Lagrangian:
 
 
 def lagrangian(circuit):
+    """:param circuit: Circuit with symbolic or numeric element values in SI units.
+    :returns: Lagrangian containing incidence, capacitance, inductive, and source matrices.
+    """
     branches = circuit.branches
     n = len(circuit.internal_nodes)
     Omega = sym.Matrix(incidence(circuit))

@@ -38,6 +38,33 @@ res.ham.E_C, res.B # intermediate matrices use their notes names
 
 ## Conventions
 
+`Loops.from_circuit(circuit)` constructs a default `branch_dict` of
+fundamental cycles from a deterministic spanning tree (J/L branches first,
+then C/V, in circuit order). Each loop is named after its closure branch,
+which is listed first. It prints one line per
+loop with signed branches, classification, and assigned flux:
+
+```python
+loops = Loops.from_circuit(fluxonium)  # L: +L -J [superconducting]; flux = Phi_L
+loops.branch_dict                    # dict[str, tuple[str, ...]]
+loops = Loops(fluxonium, {"f": ("J", "L")}, {"f": 0})
+```
+
+Pass `zero_capacitive=True` to default every loop containing a capacitor or
+voltage-source branch to zero flux. For custom fluxes, use
+`Loops(circuit, branch_dict, fluxes=...)`. For a custom tree, use
+`Loops(circuit, cq.fundamental_cycles(circuit, tree=tree), fluxes=...)`.
+Junction capacitance and an inductor's parallel capacitance
+do not break a superconducting loop. The default remains `False`, so setting
+these physical fluxes to zero is an explicit choice.
+
+Tuple entries identify one simple loop; they need not follow traversal order.
+The incidence matrix determines relative signs, with the first listed branch
+fixed to +1. Reordering that first branch can reverse the flux convention.
+Explicit signed dictionaries remain supported for specifying orientations or
+rebasing existing fluxes. An open path or a selection containing multiple
+independent loops is rejected.
+
 Omit branch values to generate symbols and infer the element from its name:
 
 ```python

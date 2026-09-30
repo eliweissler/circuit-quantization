@@ -22,12 +22,12 @@ circuit = Circuit([
     Branch("L3", 4, 5, energy_symbols=True),
 ], ground=5)
 EC, EC1, EJ1, EC2, EJ2, EC3, EJ3, EL1, EL2, EL3 = circuit.variables
-cycles = {  # eq:harm_G
-    "k": {"J1": 1, "J2": -1, "L1": 1, "L2": -1},
-    "f": {"J3": 1, "L3": -1},
-    "cb": {"C": 1, "J1": -1, "J3": -1, "L1": -1},
+branch_dict = {  # eq:harm_G; first branch fixes the positive orientation
+    "k": ("J1", "J2", "L1", "L2"),
+    "f": ("J3", "L3"),
+    "cb": ("C", "J1", "J3", "L1"),
 }
-loops = Loops(circuit, cycles, {"cb": 0})
+loops = Loops(circuit, branch_dict, {"cb": 0})
 vk, vf = loops.variables
 
 Z = sym.Matrix([[1, 0, 0, 0], [0, 1, 1, 1], [0, 1, -1, 1], [0, 1, 0, 0]])  # eq:harm_Z
@@ -98,6 +98,11 @@ cq.draw_circuit_diagram(
         r"$\Phi_{cb}=0$": (.3, .45),
     },
 )'''
+
+HARMONIUM_LOOP_OPTIONS = [
+    new_markdown_cell('## Option 2: deterministic fundamental cycles\n\n`from_circuit` selects a deterministic spanning tree and prints its signed loops and fluxes. With `zero_capacitive=True`, capacitively broken loop fluxes default to zero.\nEach loop is named after its closure branch, listed first with sign +1.\nThese default loop names and fluxes use their own basis. `rebase` below expresses\nthe physical fluxes from Option 1 in that basis, including the assumption that\n`cb` has zero flux. Subsequent calculations continue to use `loops` from Option 1.'),
+    new_code_cell('from IPython.display import display\n\ndefault_loops = Loops.from_circuit(circuit, zero_capacitive=True)\nprint("Default flux symbols:", default_loops.variables)\ndisplay(default_loops.G)\n\n# The same physical fluxes expressed in the default fundamental-cycle basis.\ndefault_physical = loops.rebase(default_loops.G, names=default_loops.names)\nprint("Physical fluxes in the default basis:")\ndisplay(default_physical.Phi_ext)\nassert default_loops.G == Loops(circuit, cq.fundamental_cycles(circuit)).G'),
+]
 
 HARMONIUM_DISCOVERY = [
     new_markdown_cell(r"""# Discover matching form
@@ -241,6 +246,7 @@ for name, (title, build, shows) in EXAMPLES.items():
     cells = [new_markdown_cell(f"# {title}\n\nEach step follows the notes; equation labels are given in comments."),
              new_code_cell(SETUP), new_code_cell(build)]
     if name == "harmonium":
+        cells += HARMONIUM_LOOP_OPTIONS
         cells.append(new_code_cell(HARMONIUM_DRAWING))
     cells += [new_code_cell(expr) for expr in shows]
     if name == "harmonium":

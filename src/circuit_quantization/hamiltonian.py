@@ -24,6 +24,9 @@ def simplify_hamiltonian(H):
 
     Keep the Hamiltonian as a sum rather than collecting it over one denominator.
     This optional symbolic step can be expensive for large circuits.
+
+    :param H: SymPy Hamiltonian expression.
+    :returns: Algebraically equivalent expression with factored terms and simplified trigonometry.
     """
     H = sym.sympify(H)
     algebraic, trig = H.as_independent(*H.atoms(sym.sin, sym.cos), as_Add=True)

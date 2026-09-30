@@ -216,7 +216,7 @@ def test_spanning_forests_preserve_parallel_branch_choices_and_isolated_ground()
     ], ground=0)
     assert list(spanning_trees(circuit)) == [("a", "c"), ("a", "d"), ("b", "c"), ("b", "d")]
     for tree in spanning_trees(circuit):
-        assert Loops(circuit, fundamental_cycles(circuit, tree)).G.shape == (2, 4)
+        assert Loops(circuit, fundamental_cycles(circuit)).G.shape == (2, 4)
 
 
 def test_different_spanning_trees_can_give_the_same_cycle_matrix():
@@ -230,3 +230,82 @@ def test_different_spanning_trees_can_give_the_same_cycle_matrix():
         cycles = fundamental_cycles(circuit, tree)
         assert Loops(circuit, cycles).G == sym.Matrix([[1, 1, 1]])
         assert set(tree) == set(circuit.branch_names) - set(cycles)
+
+
+def test_loop_tuples_infer_orientation_and_roundtrip():
+    circuit = harmonium()
+    labels = {"k": ("J1", "J2", "L1", "L2"), "f": ("J3", "L3"),
+              "cb": ("C", "J1", "J3", "L1")}
+    loops = Loops(circuit, labels, {"cb": 0})
+    expected = Loops(circuit, HARMONIUM_CYCLES, {"cb": 0})
+    assert loops.G == expected.G
+    assert loops.branch_dict == labels
+    assert loops.G * incidence(circuit).T == sym.zeros(3, 5)
+    flipped = loops.rebase(-loops.G)
+    assert Loops(circuit, flipped.branch_dict).G == flipped.G
+    reversed_f = Loops(circuit, {**labels, "f": ("L3", "J3")})
+    assert reversed_f.G[1, :] == -loops.G[1, :]
+
+
+def test_default_loop_constructor_prints_closure_first_tuples(capsys):
+    circuit = harmonium()
+    loops = Loops.from_circuit(circuit)
+    repeated = Loops.from_circuit(circuit)
+    assert repeated.branch_dict == loops.branch_dict
+    assert repeated.G == loops.G
+    assert loops.G == Loops(circuit, fundamental_cycles(circuit)).G
+    assert all(labels[0] == name for name, labels in loops.branch_dict.items())
+    output = capsys.readouterr().out
+    for name in loops.names:
+        assert f"{name}: +{name}" in output
+        assert f"flux = Phi_{name}" in output
+    assert Loops(circuit, loops.branch_dict).G == loops.G
+
+
+@pytest.mark.parametrize("labels, message", [
+    (("J1", "J1"), "distinct"), ((), "nonempty"),
+    (("J1", "unknown"), "unknown branches"),
+    (("J1", "L1"), "single closed loop"),
+    (("J1", "J2", "L1", "L2", "J3"), "single closed loop"),
+    (("J1", "J2", "L1", "L2", "J3", "L3"), "single closed loop"),
+])
+def test_loop_tuples_reject_invalid_support(labels, message):
+    with pytest.raises(ValueError, match=message):
+        Loops(harmonium(), {"bad": labels})
+
+
+def test_default_loop_constructor_accepts_tree_circuit(capsys):
+    circuit = Circuit([Branch("J1", 1, 0)], ground=0)
+    loops = Loops.from_circuit(circuit)
+    assert loops.branch_dict == {}
+    assert loops.G.shape == (0, 1)
+    assert capsys.readouterr().out.strip() == "No loops."
+
+
+def test_default_loops_zero_capacitive_by_full_loop_support(capsys):
+    circuit = harmonium()
+    loops = Loops.from_circuit(circuit, zero_capacitive=True)
+    for name, labels in loops.branch_dict.items():
+        flux = loops.Phi_ext[loops.names.index(name)]
+        assert flux == (0 if "C" in labels else sym.Symbol(f"Phi_{name}", real=True))
+    assert "[capacitively broken]; flux = 0" in capsys.readouterr().out
+
+
+def test_zero_capacitive_preserves_explicit_fluxes_and_includes_sources(capsys):
+    circuit = coupled()
+    baseline = Loops.from_circuit(circuit)
+    loops = Loops.from_circuit(circuit, zero_capacitive=True)
+    assert sum(flux != 0 for flux in baseline.Phi_ext) == 9
+    assert sum(flux != 0 for flux in loops.Phi_ext) == 2
+    name = next(name for name, flux in zip(loops.names, loops.Phi_ext) if flux == 0)
+    supplied = {name: sym.Symbol("drive", real=True)}
+    overridden = Loops(circuit, loops.branch_dict, supplied)
+    assert overridden.Phi_ext[overridden.names.index(name)] == supplied[name]
+    assert len(supplied) == 1  # caller's dictionary is unchanged
+
+
+def test_inductor_capacitance_does_not_break_superconducting_loop(capsys):
+    circuit = Circuit([Branch("J1", 1, 0), Branch("L1", 1, 0, L=1, C=1)], ground=0)
+    loops = Loops.from_circuit(circuit, zero_capacitive=True)
+    assert loops.variables == (sym.Symbol("Phi_L1", real=True),)
+    assert "[superconducting]" in capsys.readouterr().out

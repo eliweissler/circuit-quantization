@@ -20,6 +20,18 @@ def draw_circuit_diagram(circuit, out=None, *, layout="planar", scale=4., spread
     Ground is drawn even when isolated. Voltage sources have + toward the source
     node. Boxed junctions include intrinsic C; an inductor's C is shown in parallel.
     Install the optional dependencies with ``pip install '.[draw]'``.
+
+    :param circuit: Circuit to draw.
+    :param out: Optional output path (SVG, PDF, or PNG).
+    :param layout: Layout name or a dict mapping every node to an (x, y) position.
+    :param float scale: Positive coordinate scale; default 4.
+    :param float spread: Positive parallel-branch separation factor; default 0.4.
+    :param bool label: Show branch labels.
+    :param bool node_labels: Show node labels.
+    :param label_loc: Optional node-to-label-side mapping (top, bottom, left, right).
+    :param flux_labels: Optional mapping from annotation text to (x, y) coordinates.
+    :returns: Schemdraw Drawing, renderable inline in notebooks.
+    :raises ValueError: Invalid layout, positions, scale, or spacing.
     """
     import numpy as np
     import schemdraw
