@@ -105,6 +105,28 @@ automatic basis). For an existing expression, use `cq.simplify_hamiltonian(res.H
 This optional step keeps the additive terms separate and can take time for large
 symbolic circuits.
 
+After truncation, `res.coords.Z` embeds retained coordinates into node space;
+`res.coords.R` extracts them: `R * Z = I` and `R * Z_discarded = 0`.
+It is computed by selecting the retained rows of the full decoupled inverse,
+`R = P * Z_dc.inv()`, keeping the non-dynamical columns during inversion.
+The capacitance identity `R = C_tilde_inv * Z.T * C_int` is an equivalent check. A discarded
+coordinate can acquire a flux-dependent value without shifting the retained
+coordinates. Accordingly, homogeneous flux-gauge shifts satisfy `R * W = 0`.
+The default flux assignment selects `W = 0`.
+
+`cq.coordinates(lag, Z_full)` takes the full **decoupled** basis and retains it
+as `coords.Z_full`, with all column labels in `coords.types_full`. It infers the
+dynamical columns `coords.Z` and selects the corresponding inverse rows for
+`coords.R`. `cq.mode_types(lag, Z)` classifies either full or retained columns,
+including free, frozen, and cyclic directions. Use `cq.decouple` first when
+the supplied full basis still couples dynamical and non-dynamical sectors.
+Residual transformations update only the retained columns of `Z_full`.
+
+`tests/test_truncation_flux.py` gives an alternating L-C-L-C box with unequal
+elements and time-dependent loop flux. It demonstrates the spurious retained
+shift from `Z.pinv()` and checks extraction, gauge cancellation, and frozen-mode
+elimination against the full node-space energy.
+
 ## Symbolic constants
 
 `units.e`, `units.h`, `units.hbar`, and `units.Phi0` are positive symbols;

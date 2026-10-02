@@ -19,6 +19,7 @@ Symbols in the notes and their names here:
     Lstar_int           internal susceptance L*_int
     G, Phi_ext          loop matrix and external fluxes [Wb]
     Z, types            retained coordinate transformation and mode types
+    R                   retained-coordinate extraction, R Z = I and R Z_2 = 0
     C_tilde, Lstar_tilde, omega_J_tilde, omega_L_tilde   transformed objects
     B                   irrotational flux-assignment matrix
     E_C, E_L, E_Lb      frequency-unit matrices [GHz]
@@ -34,9 +35,11 @@ from .lagrangian import lagrangian
 from .modes import (
     check_basis,
     check_coordinates,
+    coordinates,
     decouple,
     mode_basis,
     mode_dimensions,
+    mode_types,
     residual_freedom,
     transform,
 )

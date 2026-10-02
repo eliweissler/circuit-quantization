@@ -19,7 +19,10 @@ TYPES = DYNAMICAL + NONDYNAMICAL
 
 @dataclass(frozen=True)
 class Coordinates:
-    Z: sym.ImmutableMatrix  # retained block, Phi_int = Z Phi_tilde
+    Z_full: sym.ImmutableMatrix  # full decoupled basis, including non-dynamical columns
+    types_full: tuple
+    Z: sym.ImmutableMatrix  # retained embedding: Phi_int = Z Phi_tilde + Z_2 Phi_disc
+    R: sym.ImmutableMatrix  # retained extraction: Phi_tilde = R Phi_int, eq:Z_truncated
     types: tuple
     C_tilde: sym.ImmutableMatrix  # eq:Zd_schur
     C_tilde_inv: sym.ImmutableMatrix
@@ -150,7 +153,7 @@ def check_basis(lag, Z_full, types):
 def check_coordinates(lag, coords):
     """Check the decoupled dynamical columns against tab:var_basis and eq:compact_period_lattice."""
     sub = subspaces(lag)
-    actual = _mode_types(coords.omega_J_tilde, coords.omega_L_tilde)
+    actual = mode_types(lag, coords.Z)
     for j, (declared, inferred) in enumerate(zip(coords.types, actual)):
         if declared != inferred:
             raise ValueError(f"Retained column {j} is not a valid {declared!r} direction (tab:var_basis)")
@@ -172,27 +175,59 @@ def check_coordinates(lag, coords):
 # --- decoupling and truncation ----------------------------------------------
 
 
-def _mode_types(omega_J, omega_L):
-    """Classify retained columns by junction and inductor participation (tab:var_basis)."""
+def mode_types(lag, Z):
+    """Classify each column by capacitive, junction, and inductor participation.
+
+    :param lag: Node Lagrangian matrices.
+    :param Z: Node-space columns, full or retained, in internal-node row order.
+    :returns: Tuple of c, e, h, fr, fz, or cy labels in column order.
+    """
+    Z = sym.Matrix(Z)
+    J, L, C = [(Z.T * mat).applyfunc(sym.cancel).tolist()
+               for mat in (lag.omega_J_int, lag.omega_L_int, lag.C_int)]
     return tuple(
-        "e" if any(j) and any(l) else "c" if any(j) else "h" if any(l) else "fr"
-        for j, l in zip(omega_J.applyfunc(sym.simplify).tolist(),
-                        omega_L.applyfunc(sym.simplify).tolist())
+        ("e" if any(l) else "c") if any(j) else
+        ("h" if any(c) else "fz") if any(l) else
+        ("fr" if any(c) else "cy")
+        for j, l, c in zip(J, L, C)
     )
 
 
-def coordinates(lag, Z, types=None):
-    """Transformed objects of the retained block Z (eq:Zd_schur)."""
-    Z = sym.Matrix(Z)
+def coordinates(lag, Z_full, types=None):
+    """Build retained objects from a full decoupled basis (eq:Z_truncated).
+
+    :param lag: Node Lagrangian matrices.
+    :param Z_full: Square decoupled node-to-coordinate matrix, including all
+        non-dynamical columns. Use decouple first if the sectors are coupled.
+    :param types: Optional labels for all columns; otherwise infer with mode_types.
+    :returns: Coordinates retaining Z_full and types_full, with dynamical columns
+        Z and corresponding rows R of the full inverse. Column order is preserved.
+    :raises ValueError: Invalid dimensions, no dynamical modes, or singular capacitance.
+    """
+    Z_full = sym.Matrix(Z_full)
+    n = lag.Omega_int.rows
+    if Z_full.shape != (n, n):
+        raise ValueError(f"Z_full must be {n}x{n}, including non-dynamical columns")
+    types = mode_types(lag, Z_full) if types is None else tuple(types)
+    if len(types) != n or set(types) - set(TYPES):
+        raise ValueError("types must give one valid mode label per full-basis column")
+    retained = [i for i, t in enumerate(types) if t in DYNAMICAL]
+    if not retained:
+        raise ValueError("Circuit has no dynamical modes")
+    Z = Z_full[:, retained]
+    R = Z_full.inv()[retained, :]  # eq:Z_truncated
     C_tilde = (Z.T * lag.C_int * Z).applyfunc(sym.cancel)
     if sym.cancel(C_tilde.det()) == 0:
         raise ValueError("Retained capacitance matrix is singular")
+    C_tilde_inv = C_tilde.inv().applyfunc(sym.cancel)
     omega_J, omega_L = Z.T * lag.omega_J_int, Z.T * lag.omega_L_int
     freeze = sym.ImmutableMatrix
     return Coordinates(
-        Z=freeze(Z), types=_mode_types(omega_J, omega_L) if types is None else tuple(types),
+        Z_full=freeze(Z_full), types_full=types,
+        Z=freeze(Z), types=tuple(types[i] for i in retained),
+        R=freeze(sym.Matrix(R).applyfunc(sym.cancel)),
         C_tilde=freeze(C_tilde),
-        C_tilde_inv=freeze(C_tilde.inv().applyfunc(sym.cancel)),
+        C_tilde_inv=freeze(C_tilde_inv),
         Lstar_tilde=freeze((Z.T * lag.Lstar_int * Z).applyfunc(sym.cancel)),
         omega_J_tilde=freeze(omega_J), omega_L_tilde=freeze(omega_L),
     )
@@ -219,25 +254,22 @@ def decouple(lag, Z_full, types):
     :param lag: Node Lagrangian matrices.
     :param Z_full: Full square node-to-coordinate basis.
     :param types: Mode label for each basis column.
-    :returns: Coordinates containing the retained dynamical columns and transformed matrices.
+    :returns: Coordinates containing the retained columns of Z_dc, corresponding
+        rows of its full inverse R = P Z_dc^{-1}, and transformed matrices.
     """
     Z = sym.Matrix(Z_full)
     sectors = [
         (form, Z[:, [j for j, t in enumerate(types) if t == kind]])
         for kind, form in (("fr", lag.C_int), ("fz", lag.Lstar_int))
     ]
-    retained, retained_types = [], []
     for j, t in enumerate(types):
         if t not in DYNAMICAL:
             continue
         z = Z[:, j]
         for form, nondynamical in sectors:
             z = _decouple_column(z, nondynamical, form)
-        retained.append(z.applyfunc(sym.cancel))
-        retained_types.append(t)
-    if not retained:
-        raise ValueError("Circuit has no dynamical modes")
-    return coordinates(lag, sym.Matrix.hstack(*retained), retained_types)
+        Z[:, j] = z.applyfunc(sym.cancel)
+    return coordinates(lag, Z, types)
 
 
 # --- residual freedom -------------------------------------------------------
@@ -291,6 +323,11 @@ def transform(lag, coords, S1):
     S_cc = S.extract(compact, compact).applyfunc(sym.simplify)
     if compact and (not all(_is_integer(x) for x in S_cc) or abs(S_cc.det()) != 1):
         raise ValueError("S_cc must lie in GL(N_c, Z) (eq:Scc_unimodular)")
-    new = coordinates(lag, coords.Z * S)
+    retained = [i for i, t in enumerate(coords.types_full) if t in DYNAMICAL]
+    Z_full = sym.Matrix(coords.Z_full)
+    Z = coords.Z * S
+    for j, index in enumerate(retained):
+        Z_full[:, index] = Z[:, j]
+    new = coordinates(lag, Z_full)
     check_coordinates(lag, new)
     return new
