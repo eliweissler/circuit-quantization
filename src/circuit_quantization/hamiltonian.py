@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import sympy as sym
 
+from .modes import _cancel
 from .units import e, farad_to_ghz, henry_to_ghz, weber_to_phase
 
 
@@ -36,22 +37,21 @@ def simplify_hamiltonian(H):
 
 def hamiltonian(lag, coords, loops, B, t, *, simplify=False):
     N_d = coords.Z.cols
-    varphi = sym.Matrix(sym.symbols(f"varphi_1:{N_d + 1}", real=True))
-    n = sym.Matrix(sym.symbols(f"n_1:{N_d + 1}", real=True))
-    Z, B = sym.Matrix(coords.Z), sym.Matrix(B)
-    Phi_ext = sym.Matrix(loops.Phi_ext)
+    varphi = sym.ImmutableMatrix(sym.symbols(f"varphi_1:{N_d + 1}", real=True))
+    n = sym.ImmutableMatrix(sym.symbols(f"n_1:{N_d + 1}", real=True))
+    Phi_ext = loops.Phi_ext
     varphi_ext = weber_to_phase(Phi_ext)  # eq:dimless_defs
 
     # eq:EC_EL_matrix: scale inverse-element matrices by the unit-element energies.
-    E_C = (farad_to_ghz(1) * coords.C_tilde_inv).applyfunc(sym.cancel)
-    E_L = (henry_to_ghz(1) * coords.Lstar_tilde).applyfunc(sym.cancel)
-    E_Lb = (henry_to_ghz(1) * lag.Lb_inv).applyfunc(sym.cancel)
+    E_C = _cancel(farad_to_ghz(1) * coords.C_tilde_inv)
+    E_L = _cancel(henry_to_ghz(1) * coords.Lstar_tilde)
+    E_Lb = _cancel(henry_to_ghz(1) * lag.Lb_inv)
 
     # eq:Q_g_tilde_expanded; the flux term vanishes for irrotational B.
-    Q_g = Z.T * (-lag.C_int_src * lag.V + lag.Omega_int * lag.C_b * B * Phi_ext.diff(t))
+    Q_g = coords.Z.T * (-lag.C_int_src * lag.V + lag.Omega_int * lag.C_b * B * Phi_ext.diff(t))
     # Each compact mode also carries a static sector label (Sec IV.B.1).
     sector = [sym.Symbol(f"n_g{j + 1}", real=True) if typ == "c" else 0 for j, typ in enumerate(coords.types)]
-    n_g = (Q_g / (2 * e)).applyfunc(sym.cancel) + sym.Matrix(sector)
+    n_g = _cancel(Q_g / (2 * e)) + sym.Matrix(sector)
 
     B_L = B[list(lag.L), :]
     B_J = B[list(lag.J), :]
@@ -62,8 +62,7 @@ def hamiltonian(lag, coords, loops, B, t, *, simplify=False):
     junction_phase = coords.omega_J_tilde.T * varphi + B_J * varphi_ext
     H -= sum(EJ * sym.cos(phase) for EJ, phase in zip(lag.EJ, junction_phase))  # Josephson
 
-    freeze = sym.ImmutableMatrix
     return Hamiltonian(
-        H=simplify_hamiltonian(H) if simplify else H, varphi=freeze(varphi), n=freeze(n), n_g=freeze(n_g),
-        varphi_ext=freeze(varphi_ext), E_C=freeze(E_C), E_L=freeze(E_L), E_Lb=freeze(E_Lb),
+        H=simplify_hamiltonian(H) if simplify else H, varphi=varphi, n=n, n_g=n_g,
+        varphi_ext=varphi_ext, E_C=E_C, E_L=E_L, E_Lb=E_Lb,
     )

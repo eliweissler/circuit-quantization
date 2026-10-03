@@ -3,7 +3,7 @@ import pytest
 import sympy as sym
 
 from circuit_quantization import (
-    Branch, Circuit, Loops, check_basis, check_coordinates, decouple, fundamental_cycles, irrotational_B,
+    Branch, Circuit, Loops, decouple, default_tree, irrotational_B,
     lagrangian, mode_basis, to_scqubits,
 )
 from circuits import random_circuit
@@ -29,7 +29,7 @@ def test_transmon_molecule_matches_scqubits():
     circuit = Circuit([
         Branch("J1", 1, 2, C=1, EJ=5), Branch("J2", 3, 4, C=1, EJ=5),
         Branch("C13", 1, 3, C=1), Branch("C24", 2, 4, C=1),
-    ], ground=0)
+    ])
     Z, types = mode_basis(lagrangian(circuit))
     assert types.count("c") == len(sc_modes["periodic"]) == 2
     assert types.count("fr") == len(sc_modes["free"]) == 1
@@ -56,10 +56,8 @@ def test_random_circuits_match_scqubits_modes_and_flux_allocation(seed):
     Z, types = mode_basis(lag)
     if not set(types) & {"c", "e", "h"}:
         pytest.skip("no dynamical modes")
-    check_basis(lag, Z, types)
     coords = decouple(lag, Z, types)
-    check_coordinates(lag, coords)
-    loops = Loops(circuit, fundamental_cycles(circuit))
+    loops = Loops.from_tree(circuit, default_tree(circuit))
     B = irrotational_B(lag, coords, loops)
 
     theirs = to_scqubits(circuit, symbolic=True, use_dynamic_flux_grouping=True)

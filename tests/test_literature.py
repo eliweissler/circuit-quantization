@@ -4,7 +4,7 @@ import sympy as sym
 
 import circuit_quantization as cq
 from circuit_quantization import (
-    Branch, Circuit, Loops, check_basis, check_coordinates, decouple, fundamental_cycles, hamiltonian,
+    Branch, Circuit, Loops, decouple, default_tree, hamiltonian,
     lagrangian, quantize, subs_constants,
 )
 from circuit_quantization.units import e, h_GHz
@@ -17,9 +17,7 @@ def zero(M):
 
 def coordinates(circuit, Z, types):
     lag = lagrangian(circuit)
-    check_basis(lag, Z, types)
     coords = decouple(lag, Z, types)
-    check_coordinates(lag, coords)
     return lag, coords
 
 
@@ -27,7 +25,7 @@ def test_double_squid_with_shared_junction():
     # You, Sauls, Koch, PRB 99, 174512 (arXiv:1902.04734), Sec V.B: meshes R = ((1, -1, 0), (0, 1, -1)).
     C1, C2, C3 = pos("C_1 C_2 C_3")
     circuit = Circuit([Branch(f"J{k}", 1, 0, C=C, EJ=1) for k, C in ((1, C1), (2, C2), (3, C3))], ground=0)
-    loops = Loops(circuit, {"e1": {"J1": 1, "J2": -1}, "e2": {"J2": 1, "J3": -1}})
+    loops = Loops.from_branch_dict(circuit, {"e1": {"J1": 1, "J2": -1}, "e2": {"J2": 1, "J3": -1}})
     S = C1 + C2 + C3
     expected = sym.Matrix([[C2 + C3, C3], [-C1, C3], [-C1, -(C1 + C2)]]) / S  # last columns of M_+^{-1}
     assert zero(quantize(circuit, loops).B - expected)
@@ -36,8 +34,8 @@ def test_double_squid_with_shared_junction():
 def test_ring_of_junctions_divides_flux_by_inverse_capacitance():
     # You, Sauls, Koch, Sec V.A: in a loop of junctions each junction takes C_k^{-1} / sum_j C_j^{-1}.
     Cs = pos("C_1:6")
-    circuit = Circuit([Branch(f"J{k}", k, k % 5 + 1, C=C, EJ=1) for k, C in enumerate(Cs, start=1)], ground=0)
-    loops = Loops(circuit, {"ring": {f"J{k}": 1 for k in range(1, 6)}})
+    circuit = Circuit([Branch(f"J{k}", k, k % 5 + 1, C=C, EJ=1) for k, C in enumerate(Cs, start=1)])
+    loops = Loops.from_branch_dict(circuit, {"ring": {f"J{k}": 1 for k in range(1, 6)}})
     B = quantize(circuit, loops).B
     assert zero(B - sym.Matrix([1 / C for C in Cs]) / sum(1 / C for C in Cs))
 
@@ -49,7 +47,7 @@ def test_junction_allocation_is_the_irrotational_hamiltonian_in_a_moving_frame()
     CJ, L, EJ = pos("C_J L E_J")
     circuit = Circuit([Branch("J", 1, 0, C=CJ, EJ=EJ), Branch("L", 1, 0, L=L)], ground=0)
     Phi = sym.Function("Phi")(circuit.t)
-    loops = Loops(circuit, {"f": {"J": 1, "L": -1}}, {"f": Phi})
+    loops = Loops.from_branch_dict(circuit, {"f": {"J": 1, "L": -1}}, {"f": Phi})
     irrotational = quantize(circuit, loops)
     assert irrotational.B == sym.Matrix([[0], [-1]])  # inductor allocation, B_J = 0
     lag, coords = irrotational.lag, irrotational.coords
@@ -68,7 +66,7 @@ def test_disordered_zero_pi_capacitance_and_susceptance():
         Branch("J1", 1, 2, C=CJ1, EJ=1), Branch("J2", 3, 4, C=CJ2, EJ=1),
         Branch("L1", 2, 3, L=L1), Branch("L2", 4, 1, L=L2),
         Branch("C1", 1, 3, C=C1), Branch("C2", 2, 4, C=C2),
-    ], ground=5)
+    ])
     _, coords = coordinates(circuit, ZERO_PI_Z, ("e", "c", "h", "cy"))
     CJ, dCJ = (CJ1 + CJ2) / 2, (CJ1 - CJ2) / ((CJ1 + CJ2) / 2)
     C, dC = (C1 + C2) / 2, (C1 - C2) / ((C1 + C2) / 2)
@@ -132,7 +130,7 @@ def test_series_inductors_are_the_small_capacitance_limit():
         return Circuit([Branch("J", 1, 0, C=CJ, EJ=1), Branch("La", 1, 2, L=La),
                         Branch("Lb", 2, 0, C=C_middle, L=Lb)], ground=0)
 
-    frozen = quantize(fluxonium(0), Loops(fluxonium(0), fundamental_cycles(fluxonium(0))))
+    frozen = quantize(fluxonium(0), Loops.from_tree(fluxonium(0), default_tree(fluxonium(0))))
     assert frozen.coords.types == ("e",)
     circuit = fluxonium(eps)
     lag, coords = coordinates(circuit, sym.eye(2), ("e", "h"))

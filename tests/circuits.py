@@ -30,7 +30,7 @@ HARMONIUM_Z = sym.Matrix([[1, 0, 0, 0], [0, 1, 1, 1], [0, 1, -1, 1], [0, 1, 0, 0
 
 
 def zero_pi():
-    """fig:zeropi_kite left, symmetric; ground node 5 is isolated (eq:zp_Omega)."""
+    """fig:zeropi_kite left, symmetric; floating, with no ground (eq:zp_Omega)."""
     CJ, C, L, EJ = pos("C_J C L E_J")
     return Circuit([
         Branch("J1", 1, 2, C=CJ, EJ=EJ),
@@ -39,7 +39,7 @@ def zero_pi():
         Branch("L2", 4, 1, L=L),
         Branch("C1", 1, 3, C=C),
         Branch("C2", 2, 4, C=C),
-    ], ground=5)
+    ])
 
 
 ZERO_PI_CYCLES = {  # eq:zp_G

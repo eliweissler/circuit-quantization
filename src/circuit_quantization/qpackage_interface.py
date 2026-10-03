@@ -14,7 +14,8 @@ def _scqubits_input(circuit, subs, node_order):
     if len(order) != len(circuit.internal_nodes) or set(order) != set(circuit.internal_nodes):
         raise ValueError("node_order must contain each internal node exactly once")
     nodes = {node: i + 1 for i, node in enumerate(order)}
-    nodes[circuit.ground] = 0
+    if circuit.ground is not None:
+        nodes[circuit.ground] = 0
     rows, indices = [], {}
 
     def parameter(name, value):

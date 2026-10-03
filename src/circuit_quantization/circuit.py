@@ -1,8 +1,7 @@
-"""Circuit description, incidence matrix, and cycle basis (Sec I)."""
+"""Circuit description and incidence matrix (Sec I.A, I.B)."""
 
 import re
 from dataclasses import dataclass, field
-from itertools import combinations
 
 import networkx as nx
 import sympy as sym
@@ -11,6 +10,7 @@ from .units import Phi0, e, ghz_to_farad, ghz_to_henry, h, hbar, h_GHz
 
 # Branch order of eq:Omega_columns.
 TYPES = ("C", "J", "L", "V")
+INDUCTIVE = ("J", "L")
 
 
 def _variables(values):
@@ -21,6 +21,24 @@ def _variables(values):
         for symbol in sorted(sym.sympify(value).free_symbols - constants, key=sym.default_sort_key)
     ))
 
+# Generate symbols for branch parameters
+def parameter(name, energy_symbols=False):
+    """Symbol for an omitted value; the first letter of name selects C, J (for E_J), L, or V.
+
+    C1 -> C_1, CJ1 -> C_J1, J1 -> E_J1, L1 -> L_1, V1 -> V_1.
+    energy_symbols turns C and L into GHz energies E_C1, E_CJ1, E_L1, converted to SI.
+    """
+    kind = name[0]
+    if kind == "J" or (energy_symbols and kind in ("C", "L")):
+        symbol = sym.Symbol(f"E_{name}", positive=True)
+    else:
+        label = f"{kind}_{name[1:]}" if name[1:] else kind
+        symbol = sym.Symbol(label, **({"real": True} if kind == "V" else {"positive": True}))
+    if energy_symbols and kind == "C":
+        return ghz_to_farad(symbol)
+    if energy_symbols and kind == "L":
+        return ghz_to_henry(symbol)
+    return symbol
 
 @dataclass(frozen=True)
 class Branch:
@@ -62,39 +80,42 @@ class Branch:
     V: object = None
     energy_symbols: bool = field(default=False, kw_only=True)
 
+    # Make any necessary symbols and verify valid branches
     def __post_init__(self):
-        name = self.name[0] + self.name[1:].lstrip("_") if self.name else ""
+        self._set_default_values()
+        self._check_branch()
 
-        def parameter(kind):
-            label = ("C" + name) if kind == "C" and name[:1] != "C" else name
-            energy = kind == "EJ" or (self.energy_symbols and kind in ("C", "L"))
-            label = f"E_{label}" if energy else label[:1] + ("_" + label[1:] if label[1:] else "")
-            symbol = sym.Symbol(label, **({"real": True} if kind == "V" else {"positive": True}))
-            if self.energy_symbols and kind in ("C", "L"):
-                return (ghz_to_farad if kind == "C" else ghz_to_henry)(symbol)
-            return symbol
-
-        if all(value is None for value in (self.C, self.L, self.EJ, self.V)):
+    def _set_default_values(self):
+        """Generate symbols for omitted values, then convert floats to exact rationals."""
+        name = self.name[0] + self.name[1:].lstrip("_") if self.name else ""  # J_1 -> J1
+        if self.C is None and self.L is None and self.EJ is None and self.V is None:
             if name[:1] not in TYPES:
                 raise ValueError("A branch without values needs a name starting with C, J, L, or V")
             attr = {"C": "C", "J": "EJ", "L": "L", "V": "V"}[name[0]]
-            object.__setattr__(self, attr, parameter(attr))
+            object.__setattr__(self, attr, parameter(name, self.energy_symbols))
+        # Omitted C is generated for a junction and zero for an inductor or source.
         if self.C is None:
-            object.__setattr__(self, "C", parameter("C") if self.type in ("C", "J") else 0)
+            object.__setattr__(self, "C", parameter("C" + name, self.energy_symbols) if self.type == "J" else 0)
         for attr in ("C", "L", "EJ", "V"):
             value = getattr(self, attr)
             if value is not None:
                 object.__setattr__(self, attr, sym.nsimplify(sym.sympify(value), rational=True))
+
+    def _check_branch(self):
+        # No self loops
         if self.tail == self.head:
             raise ValueError(f"Branch {self.name!r} is a self-loop")
-        if sum(x is not None for x in (self.L, self.EJ, self.V)) > 1:
-            raise ValueError(f"Branch {self.name!r} may carry at most one of L, EJ, V")
+        # Voltage sources only have V
+        if self.V is not None and (self.C != 0 or self.L is not None or self.EJ is not None):
+            raise ValueError(f"Source branch {self.name!r} may carry only V")
+        # At most one of L, EJ
+        if self.L is not None and self.EJ is not None:
+            raise ValueError(f"Branch {self.name!r} may carry at most one of L, EJ")
+        # Valid capacitance, inductance, and Josephson energy values
         if not (self.C == 0 or self.C.is_positive):
-            raise ValueError(f"Branch {self.name!r}: C must be 0 or provably positive")
+            raise ValueError(f"Branch {self.name!r}: C must be 0 or positive")
         if self.type in ("C", "J") and self.C == 0:
             raise ValueError(f"Branch {self.name!r}: a {self.type} branch needs C > 0")
-        if self.type == "V" and self.C != 0:
-            raise ValueError(f"Source branch {self.name!r} must have C = 0")
         for attr in ("L", "EJ"):
             value = getattr(self, attr)
             if value is not None and value.is_positive is False:
@@ -126,32 +147,71 @@ def _ordered(nodes):
     return sorted(dict.fromkeys(nodes), key=key)
 
 
+def _graph(circuit):
+    """Undirected multigraph keyed by branch name, so parallel branches stay distinct."""
+    G = nx.MultiGraph()
+    for i,b in enumerate(circuit.branches):
+        G.add_edge(b.tail, b.head, key=b.name, inductive=b.type in INDUCTIVE, source=b.type == "V", has_capacitance =b.C != 0,
+                   rank=i + len(circuit.branches) * (b.type not in INDUCTIVE) + len(circuit.branches) * (b.type == "V"))  # J, L before C then V then branch order as tiebreaker
+    return G
+
+
 @dataclass(frozen=True)
 class Circuit:
-    """Connected branches plus a reference ground, which may be isolated for a floating circuit.
+    """Connected branches plus an optional reference ground.
 
-    Nodes are ordered int | gnd | src (Sec I.B).
+    Nodes are ordered int | gnd | src (Sec I.B); a floating circuit has no gnd row.
 
     :param branches: Iterable of Branch objects forming one connected graph.
-    :param ground: Reference-node label; may be absent from branches for a floating circuit.
+    :param ground: Label of a node on some branch, or None for a floating circuit.
     :param t: SymPy time symbol used for time-dependent fluxes and voltages.
     :raises ValueError: Empty/disconnected graph, duplicate labels, or invalid source connections.
     """
 
     branches: tuple
-    ground: object
+    ground: object = None
     t: sym.Symbol = field(default=sym.Symbol("t", real=True))
+    graph: nx.MultiGraph = field(init=False, repr=False, compare=False)
+    source_nodes: tuple = field(init=False, repr=False)
+    internal_nodes: tuple = field(init=False, repr=False)
 
+    # Verify valid circuit and make graph representation
     def __post_init__(self):
-        branches = tuple(self.branches)
-        if not branches or not nx.is_connected(nx.Graph((b.tail, b.head) for b in branches)):
+        self._sort_nodes_and_branches()
+        object.__setattr__(self, "graph", _graph(self))
+        self._check_circuit()
+
+    def _sort_nodes_and_branches(self):
+        # Sort by type C | J | L | V, keeping user order within a type (eq:Omega_columns).
+        # And seperate internal nodes from source nodes, sorting by natural string within each sector.
+        branches = tuple(sorted(self.branches, key=lambda b: TYPES.index(b.type)))
+        all_nodes = {b.tail for b in branches} | {b.head for b in branches}
+        sources = []
+        for b in branches:
+            if b.type == "V":
+                sources.append(b.head if b.tail == self.ground else b.tail)
+        internal = [n for n in all_nodes if n not in sources and n != self.ground]
+        object.__setattr__(self, "source_nodes", tuple(_ordered(sources)))
+        object.__setattr__(self, "internal_nodes", tuple(_ordered(internal)))
+        object.__setattr__(self, "branches", branches)
+
+    def _check_circuit(self):
+        # Nonempty connected graph, ground on it, at least one internal node
+        if not self.branches or not nx.is_connected(self.graph):
             raise ValueError("Circuit branches must form a nonempty connected graph")
-        names = [b.name for b in branches]
-        if len(set(names)) != len(names):
-            raise ValueError("Branch names must be unique")
-        labels = {self.ground} | {n for b in branches for n in (b.tail, b.head)}
-        if len({str(n) for n in labels}) != len(labels):
+        if self.ground is not None and self.ground not in self.graph:
+            raise ValueError(f"Ground {self.ground!r} is on no branch; use ground=None for a floating circuit")
+        if not self.internal_nodes:
+            raise ValueError("Circuit has no internal nodes")
+        # Distinct string labels, so the natural node order is well defined
+        if len({str(n) for n in self.graph}) != len(self.graph):
             raise ValueError("Two different nodes have the same string label, e.g. 1 and '1'")
+        # Branches have unique names
+        branches = self.branches
+        if len(set(self.branch_names)) != len(branches):
+            raise ValueError("Branch names must be unique")
+        # Source nodes must connect to ground and carry no other branches
+        # Source nodes must only be connected to internal nodes by capacitors
         sources = []
         for b in branches:
             if b.type == "V":
@@ -161,21 +221,13 @@ class Circuit:
         if len(set(sources)) != len(sources):
             raise ValueError("Each source node carries exactly one source")
         for b in branches:
-            if b.type in ("J", "L") and {b.tail, b.head} & set(sources):
+            if b.type in INDUCTIVE and {b.tail, b.head} & set(sources):
                 raise ValueError(f"Only capacitors may end on a source node: {b.name!r}")
-        # Sort by type C | J | L | V, keeping user order within a type (eq:Omega_columns).
-        branches = tuple(sorted(branches, key=lambda b: TYPES.index(b.type)))
-        object.__setattr__(self, "branches", branches)
-        object.__setattr__(self, "source_nodes", tuple(_ordered(sources)))
-        others = [n for b in branches for n in (b.tail, b.head)]
-        internal = [n for n in _ordered(others) if n != self.ground and n not in sources]
-        if not internal:
-            raise ValueError("Circuit has no internal nodes")
-        object.__setattr__(self, "internal_nodes", tuple(internal))
 
     @property
     def nodes(self):
-        return self.internal_nodes + (self.ground,) + self.source_nodes
+        ground = () if self.ground is None else (self.ground,)
+        return self.internal_nodes + ground + self.source_nodes
 
     @property
     def branch_names(self):
@@ -187,246 +239,16 @@ class Circuit:
         return tuple(dict.fromkeys(v for b in self.branches for v in b.variables))
 
 
-def incidence(circuit):
-    """Omega: +1 at each branch's tail and -1 at its head (Sec I.B).
-
-    :param circuit: Circuit whose ordered nodes and branches define the matrix.
+def incidence(circuit, *, elem=None):
+    """:param circuit: Circuit whose ordered nodes and branches define the matrix.
+    :param elem: Optional branch type to select a submatrix - C, J, L, or V (Sec I.B, tab:elements).
     :returns: Immutable integer matrix with node rows and branch columns.
+    Omega: +1 at each branch's tail and -1 at its head (Sec I.B).
     """
     row = {node: i for i, node in enumerate(circuit.nodes)}
-    Omega = sym.zeros(len(circuit.nodes), len(circuit.branches))
-    for k, b in enumerate(circuit.branches):
+    branches = [b for b in circuit.branches if elem is None or b.type == elem]
+    Omega = sym.zeros(len(circuit.nodes), len(branches))
+    for k, b in enumerate(branches):
         Omega[row[b.tail], k] = 1
         Omega[row[b.head], k] = -1
     return sym.ImmutableMatrix(Omega)
-
-
-def _graph(circuit):
-    graph = nx.MultiGraph()
-    graph.add_nodes_from(circuit.nodes)
-    graph.add_edges_from((b.tail, b.head) for b in circuit.branches)
-    return graph
-
-
-def spanning_trees(circuit):
-    """Yield tuples of branch names, in deterministic circuit order.
-
-    For floating circuits, include the isolated reference ground as a singleton
-    component of the spanning forest. Parallel branches remain distinct choices.
-    Exhaustive subset enumeration is intended for small circuits.
-
-    :param circuit: Circuit to enumerate. Parallel branches remain distinct.
-    :yields: Tuples of branch labels defining spanning trees; isolated ground is retained.
-    """
-    size = len(circuit.nodes) - nx.number_connected_components(_graph(circuit))
-    for branches in combinations(circuit.branches, size):
-        forest = nx.utils.UnionFind(circuit.nodes)
-        for b in branches:
-            if forest[b.tail] == forest[b.head]:
-                break
-            forest.union(b.tail, b.head)
-        else:
-            yield tuple(b.name for b in branches)
-
-
-def cycle_bases(circuit, *, primitive=True):
-    """Planned enumeration of bases made from simple loops; not implemented.
-
-    Will yield cycle dictionaries accepted by Loops, with canonical row order
-    and orientation. Parallel branch identities and two-branch loops must be
-    preserved. primitive=True will require an integer cycle-lattice basis;
-    False will require only a full-rank real cycle-space basis.
-    Non-fundamental bases have no associated tree or closure-branch labels.
-    Use spanning_trees and fundamental_cycles for closure-labelled candidates.
-    """
-    raise NotImplementedError("Enumeration of simple-loop cycle bases is not implemented")
-
-
-def default_tree(circuit):
-    """A spanning forest grown over S_ind (J, L) first, then S_cap (C, V).
-
-    Growing S_ind first makes the closure rows inside S_ind span that
-    subgraph's cycle space, so G comes out ordered as in eq:G_blocks.
-    """
-    forest = nx.utils.UnionFind(circuit.nodes)
-    tree = []
-    for b in sorted(circuit.branches, key=lambda b: b.type not in ("J", "L")):
-        if forest[b.tail] != forest[b.head]:
-            forest.union(b.tail, b.head)
-            tree.append(b.name)
-    return tree
-
-
-def fundamental_cycles(circuit, tree=None):
-    """Fundamental cycles of a spanning tree, as signed branch dicts (Appendix A).
-
-    Returns {closure branch name: {branch name: +1 or -1}}, superconducting
-    cycles first (eq:G_blocks).
-
-    :param circuit: Circuit defining branch orientations and order.
-    :param tree: Complete iterable of branch labels forming a spanning tree.
-        None selects a deterministic tree, prioritizing J/L over C/V branches.
-    :returns: Dict mapping each closure branch to a signed branch dictionary.
-        Closure coefficients are +1; superconducting cycles precede broken cycles.
-    :raises ValueError: Unknown labels or a selection that is not a spanning tree.
-    """
-    names = circuit.branch_names
-    tree = default_tree(circuit) if tree is None else list(tree)
-    if set(tree) - set(names):
-        raise ValueError(f"Unknown tree branches: {sorted(set(tree) - set(names))}")
-    # Delete one root row per connected component, the ground in its own.
-    roots = set()
-    for component in nx.connected_components(_graph(circuit)):
-        roots.add(circuit.ground if circuit.ground in component
-                  else next(n for n in circuit.nodes if n in component))
-    keep = [i for i, n in enumerate(circuit.nodes) if n not in roots]
-    tree_cols = [names.index(name) for name in tree]
-    closure_cols = sorted(
-        (k for k in range(len(names)) if names[k] not in tree),
-        key=lambda k: circuit.branches[k].type not in ("J", "L"),
-    )
-    Omega = incidence(circuit)
-    Omega_t = Omega.extract(keep, tree_cols)
-    Omega_c = Omega.extract(keep, closure_cols)
-    if Omega_t.rows != Omega_t.cols or Omega_t.det() == 0:
-        raise ValueError("tree is not a spanning forest of the circuit")
-    G_t = -Omega_c.T * Omega_t.T.inv()  # eq:tree_B, Appendix A
-    cycles = {}
-    for row, k in enumerate(closure_cols):
-        cycle = {names[j]: int(G_t[row, col]) for col, j in enumerate(tree_cols) if G_t[row, col] != 0}
-        cycle[names[k]] = 1
-        cycles[names[k]] = cycle
-    return cycles
-
-
-class Loops:
-    """A complete cycle basis G and the external flux through each cycle (Sec I.C).
-
-    Every cycle not given a value in ``fluxes`` gets a visible symbol Phi_<name> [Wb].
-    Pass 0 explicitly for a cycle that encloses no flux.
-    branch_dict maps loop names to tuples of branch labels. Signs are inferred
-    from incidence, with the first listed branch positive. Explicit signed
-    dictionaries are also accepted, including for rebasing existing fluxes.
-    """
-
-    def __init__(self, circuit, branch_dict, fluxes=None):
-        """Construct an explicit complete cycle basis and its external fluxes.
-
-        :param circuit: Circuit defining the branch labels and orientations.
-        :param branch_dict: Complete mapping of loop names to branch-label
-            tuples. Incidence fixes relative signs; the first label is +1.
-            Alternatively, supply signed branch dictionaries with values +/-1.
-        :param fluxes: Optional mapping from loop names to flux expressions in
-            webers. Missing entries generate real Phi_<name> symbols; use 0
-            explicitly for zero flux. Keys must belong to branch_dict.
-        :raises ValueError: Unknown labels, invalid/incomplete cycles, dependent
-            rows, or fluxes for unknown loops.
-        """
-        fluxes = dict(fluxes or {})
-        names = circuit.branch_names
-        Omega = incidence(circuit)
-        if set(fluxes) - set(branch_dict):
-            raise ValueError(f"Fluxes for unknown branch_dict: {sorted(set(fluxes) - set(branch_dict))}")
-        rows = []
-        for loop, cycle in branch_dict.items():
-            if set(cycle) - set(names):
-                raise ValueError(f"Cycle {loop!r} uses unknown branches: {sorted(set(cycle) - set(names))}")
-            if not isinstance(cycle, dict):
-                if not isinstance(cycle, (tuple, list)) or not cycle or len(set(cycle)) != len(cycle):
-                    raise ValueError(f"Cycle {loop!r} needs distinct branch labels in a nonempty tuple")
-                basis = Omega[:, [names.index(name) for name in cycle]].nullspace()
-                if len(basis) != 1 or any(x == 0 for x in basis[0]):
-                    raise ValueError(f"Cycle {loop!r} must describe a single closed loop")
-                signs = basis[0] / basis[0][0]
-                cycle = dict(zip(cycle, signs))
-            if any(value not in (-1, 0, 1) for value in cycle.values()):
-                # G in {0, +1, -1}: a flux is only meaningful through a physical loop (Sec I.C).
-                raise ValueError(f"Cycle {loop!r} is not a physical loop: coefficients must be 0, +1, or -1")
-            rows.append([cycle.get(name, 0) for name in names])
-        G = sym.Matrix(rows) if rows else sym.zeros(0, len(names))
-        for loop, row in zip(branch_dict, rows):
-            if any(sym.Matrix([row]) * Omega.T):
-                raise ValueError(f"Cycle {loop!r} is not a graph cycle (eq:G_OmegaT)")
-        if G.rank() < G.rows:
-            raise ValueError("branch_dict are linearly dependent")
-        N_ell = len(names) - Omega.rank()
-        if G.rows < N_ell:
-            raise ValueError(f"{N_ell - G.rows} cycle(s) missing: a complete basis has {N_ell}")
-        self.circuit = circuit
-        self.names = tuple(branch_dict)
-        self.G = sym.ImmutableMatrix(G)
-        # Put a positive branch first so this tuple representation preserves G.
-        self.branch_dict = {
-            loop: (tuple(branch_dict[loop]) if not isinstance(branch_dict[loop], dict) else
-                   tuple(names[k] for k in sorted(
-                       (k for k, value in enumerate(row) if value), key=lambda k: bool(row[k] < 0)
-                   ))) for loop, row in zip(self.names, rows)
-        }
-        self.Phi_ext = sym.ImmutableMatrix(
-            len(self.names), 1,
-            [fluxes.get(loop, sym.Symbol(f"Phi_{loop}", real=True)) for loop in self.names],
-        )
-
-    @classmethod
-    def from_circuit(cls, circuit, *, zero_capacitive=False):
-        """Generate and print fundamental cycles from the default spanning tree.
-
-        The deterministic tree prioritizes J/L over C/V branches in circuit
-        order. Each loop is named after its closure branch, whose sign is +1.
-        Prints signed branches, classification, and flux, one loop per line.
-        For custom cycles or flux values, use :class:`Loops` directly; for a
-        custom tree, obtain its cycles with :func:`fundamental_cycles` first.
-
-        :param circuit: Circuit whose fundamental cycles are generated.
-        :param bool zero_capacitive: If True, set every loop containing a C or V
-            branch to zero flux. Otherwise generate a real Phi_<name> symbol
-            for every loop. Junction/inductor capacitance does not count as
-            a capacitively broken branch. Default False.
-        :returns: Loops with generated branch_dict, G, Phi_ext, and variables.
-        """
-        cycles = fundamental_cycles(circuit)
-        branch_dict = {closure: (closure, *(name for name in cycle if name != closure))
-                       for closure, cycle in cycles.items()}
-        capacitive = {b.name for b in circuit.branches if b.type in ("C", "V")}
-        broken = {loop for loop, labels in branch_dict.items() if capacitive.intersection(labels)}
-        values = dict.fromkeys(broken, 0) if zero_capacitive else {}
-        result = cls(circuit, branch_dict, values)
-        for loop, flux in zip(result.names, result.Phi_ext):
-            elements = " ".join(f"{'+' if cycles[loop][name] == 1 else '-'}{name}"
-                                for name in branch_dict[loop])
-            kind = "capacitively broken" if loop in broken else "superconducting"
-            print(f"{loop}: {elements} [{kind}]; flux = {flux}")
-        if not branch_dict:
-            print("No loops.")
-        return result
-
-    @property
-    def variables(self):
-        """Unique external-flux symbols in loop order, including explicit expressions."""
-        return _variables(self.Phi_ext)
-
-    def rebase(self, G_new, names=None):
-        """Re-express the same fluxes in another cycle basis G_new = T G (eq:G_basis_change).
-
-        :param G_new: Complete cycle matrix in the same branch-column order as G.
-            Must be related to G by an integer unimodular transformation.
-        :param names: One unique label per new row; None generates loop_1, loop_2, ... .
-        :returns: New Loops with transformed fluxes, preserving their physical meaning.
-        :raises ValueError: Invalid basis, non-unimodular transformation, or invalid names.
-        """
-        G_new = sym.Matrix(G_new)
-        G = sym.Matrix(self.G)
-        T = G_new * G.T * (G * G.T).inv()
-        if T * G != G_new:
-            raise ValueError("G_new rows are not in the cycle space")
-        if any(not x.is_integer for x in T) or abs(T.det()) != 1:
-            raise ValueError("G_new = T G needs T integer with det T = +-1")
-        names = tuple(names) if names is not None else tuple(f"loop_{i + 1}" for i in range(G_new.rows))
-        if len(names) != G_new.rows or len(set(names)) != len(names):
-            raise ValueError(f"names needs one name per row of G_new ({G_new.rows}), all distinct")
-        branch_names = self.circuit.branch_names
-        cycles = {
-            loop: {branch_names[k]: G_new[i, k] for k in range(G_new.cols) if G_new[i, k] != 0}
-            for i, loop in enumerate(names)
-        }
-        return Loops(self.circuit, cycles, dict(zip(names, T * self.Phi_ext)))

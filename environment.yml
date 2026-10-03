@@ -1,0 +1,12 @@
+name: circuit_quantization
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - sympy==1.14.0
+      - scqubits==4.3.1
+      - ipykernel
+      - nbconvert
+      - -e .[test,draw]

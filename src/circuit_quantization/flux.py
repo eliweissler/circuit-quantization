@@ -1,6 +1,6 @@
 """Irrotational external-flux assignment (Sec V)."""
 
-import sympy as sym
+from .modes import _cancel
 
 
 def irrotational_B(lag, coords, loops):
@@ -17,13 +17,8 @@ def irrotational_B(lag, coords, loops):
     :param loops: Complete cycle basis and branch ordering for the circuit.
     :returns: Branch-by-loop flux assignment matrix B, satisfying G * B = I.
     """
-    G = sym.Matrix(loops.G)
-    N_b = lag.Omega.cols
-    if G.rows == 0:
-        return sym.ImmutableMatrix(sym.zeros(N_b, 0))
+    G, Z, Omega_int = loops.G, coords.Z, lag.Omega_int
     G_plus = G.T * (G * G.T).inv()  # eq:G_right_inverse
-    Z, Omega_int = sym.Matrix(coords.Z), sym.Matrix(lag.Omega_int)
-    drive = (Z.T * Omega_int * lag.C_b * G_plus).applyfunc(sym.cancel)
-    X = (coords.C_tilde_inv * drive).applyfunc(sym.cancel)
-    B = (G_plus - Omega_int.T * Z * X).applyfunc(sym.cancel)
-    return sym.ImmutableMatrix(B)
+    drive = _cancel(Z.T * Omega_int * lag.C_b * G_plus)
+    X = _cancel(coords.C_tilde_inv * drive)
+    return _cancel(G_plus - Omega_int.T * Z * X)

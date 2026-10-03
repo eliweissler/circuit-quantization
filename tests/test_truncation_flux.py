@@ -10,9 +10,9 @@ def box():
     circuit = Circuit([
         Branch("L1", 1, 2, L=2), Branch("C1", 2, 3, C=3),
         Branch("L2", 3, 4, L=5), Branch("C2", 4, 1, C=7),
-    ], ground=0)
+    ])
     flux = sym.Function("Phi_ext", real=True)(circuit.t)
-    loops = Loops(circuit, {"box": ("L1", "C1", "L2", "C2")}, {"box": flux})
+    loops = Loops.from_branch_dict(circuit, {"box": ("L1", "C1", "L2", "C2")}, {"box": flux})
     result = quantize(circuit, loops)
     Z_full, types = mode_basis(result.lag)
     assert types == ("h", "fr", "fz", "cy")
@@ -103,7 +103,7 @@ def test_coordinates_retain_and_classify_the_full_decoupled_basis():
     assert coords.Z == result.coords.Z
     assert coords.R == full.inv()[[2], :]
     assert coords.R * full[:, [0, 1, 3]] == sym.zeros(1, 3)
-    with pytest.raises(ValueError, match="including non-dynamical"):
+    with pytest.raises(ValueError):  # R needs the full square basis
         coordinates(result.lag, coords.Z)
 
 
@@ -114,3 +114,29 @@ def test_residual_transform_preserves_discarded_columns():
     assert transformed.coords.Z_full[:, :1] == 2 * result.coords.Z
     assert transformed.coords.types_full == result.coords.types_full
     assert transformed.coords.R == transformed.coords.Z_full.inv()[:1, :]
+
+
+@pytest.mark.parametrize("sector", [0, 1, 2], ids=["free", "frozen", "cyclic"])
+def test_driven_gauge_covariance_with_retained_and_discarded_translation(sector):
+    from circuit_quantization.units import Phi0, e, h_GHz
+
+    result, discarded = box()
+    coords, lag, loops = result.coords, result.lag, result.loops
+    # Include a genuine retained shift, as well as one discarded direction.
+    # The frozen component makes Z^+ extraction incorrect, despite RZ = I.
+    Lambda = 2 * coords.Z + discarded[:, sector]
+    shifted_B = result.B + lag.Omega_int.T * Lambda
+    assert loops.G * shifted_B == sym.eye(1)
+    shifted = quantize(result.circuit, loops, B=shifted_B)
+    delta = coords.R * Lambda * loops.Phi_ext
+    phase_translation = 2 * sym.pi * delta / Phi0
+    substitution = dict(zip(result.ham.varphi, result.ham.varphi + phase_translation))
+    # eq:gauge_H_expanded includes -Q^T R Lambda dot(Phi_ext), even though
+    # the starting irrotational Hamiltonian contains no flux-derivative drive.
+    generator = (result.ham.n.T * delta.diff(result.circuit.t))[0] * 2 * e / h_GHz
+    expected = result.H.subs(substitution, simultaneous=True) - generator
+    difference = sym.expand(shifted.H - expected)
+    # Discarded equilibria and the dropped flux-only energy can change only a
+    # scalar. Check the complete retained dynamics rather than exact H equality.
+    assert all(sym.simplify(sym.diff(difference, x)) == 0
+               for x in (*result.ham.varphi, *result.ham.n))

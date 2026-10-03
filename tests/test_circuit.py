@@ -1,7 +1,7 @@
 import pytest
 import sympy as sym
 
-from circuit_quantization import Branch, Circuit, Loops, fundamental_cycles, incidence
+from circuit_quantization import Branch, Circuit, Loops, default_tree, incidence, tree_to_G
 from circuits import HARMONIUM_CYCLES, coupled, harmonium, zero_pi
 
 C, EJ, L = sym.symbols("C E_J L", positive=True)
@@ -10,8 +10,8 @@ C, EJ, L = sym.symbols("C E_J L", positive=True)
 @pytest.mark.parametrize("kwargs, message", [
     (dict(C=0, EJ=EJ), "needs C > 0"),
     (dict(C=C, L=L, EJ=EJ), "at most one"),
-    (dict(C=C, V=1), "must have C = 0"),
-    (dict(C=sym.Symbol("x")), "provably positive"),
+    (dict(C=C, V=1), "may carry only V"),
+    (dict(C=sym.Symbol("x")), "C must be 0 or positive"),
 ])
 def test_branch_validation(kwargs, message):
     with pytest.raises(ValueError, match=message):
@@ -54,17 +54,17 @@ def test_variables_preserve_order_shared_symbols_and_loop_rebasing():
     circuit = Circuit([junction, Branch("J2", 1, 0, C=junction.C, EJ=junction.EJ),
                        Branch("C1", 1, 0)], ground=0)
     assert circuit.variables == (sym.Symbol("C_1", positive=True), *junction.variables)
-    loops = Loops(circuit, {"k": {"J1": 1, "J2": -1}, "cb": {"C1": 1, "J1": -1}}, {"cb": 0})
+    loops = Loops.from_branch_dict(circuit, {"k": {"J1": 1, "J2": -1}, "cb": {"C1": 1, "J1": -1}}, {"cb": 0})
     assert loops.variables == (sym.Symbol("Phi_k", real=True),)
     assert loops.rebase(-loops.G).variables == loops.variables
-    assert Loops(circuit, dict(zip(loops.names, ({"J1": 1, "J2": -1}, {"C1": 1, "J1": -1}))),
+    assert Loops.from_branch_dict(circuit, dict(zip(loops.names, ({"J1": 1, "J2": -1}, {"C1": 1, "J1": -1}))),
                  {"k": 0, "cb": 0}).variables == ()
 
 
 def test_automatic_symbols_quantize_and_export():
     from circuit_quantization import quantize, scqubits_yaml
     circuit = Circuit([Branch("J1", 1, 0, energy_symbols=True), Branch("L1", 1, 0, energy_symbols=True)], ground=0)
-    loops = Loops(circuit, fundamental_cycles(circuit), {"L1": 0})
+    loops = Loops.from_tree(circuit, default_tree(circuit), {"L1": 0})
     ec, ej, el = circuit.variables
     result = quantize(circuit, loops)
     phase, charge = result.ham.varphi[0], result.ham.n[0]
@@ -83,6 +83,12 @@ def test_source_rules():
 def test_disconnected_branches_are_rejected(ground):
     with pytest.raises(ValueError, match="connected graph"):
         Circuit([Branch("C1", 1, 2), Branch("C2", 3, 4)], ground=ground)
+
+
+def test_isolated_ground_is_rejected():
+    with pytest.raises(ValueError, match="ground=None"):
+        Circuit([Branch("C1", 1, 2)], ground=0)
+    assert Circuit([Branch("C1", 1, 2)]).nodes == (1, 2)
 
 
 def test_empty_circuit_is_rejected():
@@ -112,9 +118,8 @@ def test_branches_sorted_by_type_keep_user_order():
 def test_default_cycles_of_coupled_example():
     # fig:coupled_circuit_example: 2 superconducting + 7 capacitively broken loops.
     circuit = coupled()
-    cycles = fundamental_cycles(circuit)
-    assert len(cycles) == 9
-    loops = Loops(circuit, cycles)
+    loops = Loops.from_tree(circuit, default_tree(circuit))
+    assert len(loops.names) == 9
     assert loops.G * incidence(circuit).T == sym.zeros(9, 7)  # eq:G_OmegaT
     assert set(loops.G) <= {-1, 0, 1}
     kinds = [b.type for b in circuit.branches]
@@ -126,41 +131,50 @@ def test_default_cycles_of_coupled_example():
 
 def test_cycles_from_explicit_tree():
     circuit = harmonium()
-    cycles = fundamental_cycles(circuit, tree=["C", "J1", "J2", "J3"])
-    assert set(cycles) == {"L1", "L2", "L3"}
-    assert cycles["L3"] == {"J3": -1, "L3": 1}
+    loops = Loops.from_tree(circuit, ["C", "J1", "J2", "J3"])
+    assert loops.names == loops.closure_branches == ("L1", "L2", "L3")
+    assert loops.branch_dict["L3"] == {"L3": 1, "J3": -1}
+    G = loops.G
+    assert (G[2, circuit.branch_names.index("J3")], G[2, circuit.branch_names.index("L3")]) == (-1, 1)
 
 
 def test_floating_circuit_cycle_count():
-    # zero-pi: isolated ground, two components, N_ell = 6 - 3.
-    assert len(fundamental_cycles(zero_pi())) == 3
+    # zero-pi is floating: N_ell = N_b - (N - 1) = 6 - 3.
+    assert tree_to_G(zero_pi(), default_tree(zero_pi()))[1].rows == 3
 
 
 def test_loops_flux_defaults_are_visible():
     circuit = harmonium()
-    loops = Loops(circuit, HARMONIUM_CYCLES, {"cb": 0})
+    loops = Loops.from_branch_dict(circuit, HARMONIUM_CYCLES, {"cb": 0})
     Phi_k, Phi_f = sym.symbols("Phi_k Phi_f", real=True)
     assert loops.Phi_ext == sym.Matrix([Phi_k, Phi_f, 0])
 
 
 def test_loops_rejects_incomplete_or_invalid_bases():
     circuit = harmonium()
-    with pytest.raises(ValueError, match="1 cycle\\(s\\) missing"):
-        Loops(circuit, {k: HARMONIUM_CYCLES[k] for k in ("k", "f")})
-    with pytest.raises(ValueError, match="not a graph cycle"):
-        Loops(circuit, {**HARMONIUM_CYCLES, "k": {"J1": 1}})
-    with pytest.raises(ValueError, match="dependent"):
-        Loops(circuit, {**HARMONIUM_CYCLES, "cb": HARMONIUM_CYCLES["k"]})
+    with pytest.raises(ValueError, match="N_ell = N_b - rank"):
+        Loops.from_branch_dict(circuit, {k: HARMONIUM_CYCLES[k] for k in ("k", "f")})
+    with pytest.raises(ValueError, match="G Omega\\^T = 0"):
+        Loops.from_branch_dict(circuit, {**HARMONIUM_CYCLES, "k": {"J1": 1}})
+    with pytest.raises(ValueError, match="independent rows"):
+        Loops.from_branch_dict(circuit, {**HARMONIUM_CYCLES, "cb": HARMONIUM_CYCLES["k"]})
 
 
 def test_rebase_maps_fluxes_and_rejects_non_unimodular():
     circuit = harmonium()
-    loops = Loops(circuit, HARMONIUM_CYCLES, {"cb": 0})
+    loops = Loops.from_branch_dict(circuit, HARMONIUM_CYCLES, {"cb": 0})
     T = sym.Matrix([[1, 0, 0], [1, 1, 0], [0, 0, 1]])
     rebased = loops.rebase(T * loops.G)
     assert rebased.Phi_ext == T * loops.Phi_ext
-    with pytest.raises(ValueError, match="det"):
+    with pytest.raises(ValueError, match="physical loop"):
         loops.rebase(2 * loops.G)
+    # The three squares of K4 form a valid {0, +-1} basis with det T = 2 (eq:G_basis_change).
+    from itertools import combinations
+    from circuit_quantization import cycle_bases
+    K4 = Circuit([Branch(f"C{u}{v}", u, v, C=1) for u, v in combinations(range(4), 2)], ground=0)
+    squares = next(b for b in cycle_bases(K4, primitive=False) if b not in list(cycle_bases(K4)))
+    with pytest.raises(ValueError, match="det"):
+        Loops.from_tree(K4, default_tree(K4)).rebase(Loops.from_branch_dict(K4, squares).G)
 
 
 def test_nodes_sort_naturally_across_label_types():
@@ -183,11 +197,11 @@ def test_node_labels_must_differ_as_strings():
 def test_loops_reject_coefficients_outside_unit_set(cycle):
     # Each row of G is a physical loop, G in {0, +1, -1} (eq:G_OmegaT).
     with pytest.raises(ValueError, match="physical loop"):
-        Loops(harmonium(), {**HARMONIUM_CYCLES, "k": cycle})
+        Loops.from_branch_dict(harmonium(), {**HARMONIUM_CYCLES, "k": cycle})
 
 
 def test_rebase_requires_one_name_per_row():
-    loops = Loops(harmonium(), HARMONIUM_CYCLES, {"cb": 0})
+    loops = Loops.from_branch_dict(harmonium(), HARMONIUM_CYCLES, {"cb": 0})
     with pytest.raises(ValueError, match="one name per row"):
         loops.rebase(loops.G, names=("a", "b"))
 
@@ -204,19 +218,45 @@ def test_spanning_trees_harmonium_count_and_cycle_constraints():
     assert len(set(trees)) == len(trees)
     assert trees == list(spanning_trees(circuit))
     for tree in trees:
-        cycles = Loops(circuit, fundamental_cycles(circuit, tree))
+        cycles = Loops.from_tree(circuit, tree)
         assert cycles.G * incidence(circuit).T == sym.zeros(3, 5)
 
 
-def test_spanning_forests_preserve_parallel_branch_choices_and_isolated_ground():
+def test_spanning_trees_preserve_parallel_branch_choices_in_a_floating_circuit():
     from circuit_quantization import spanning_trees
     circuit = Circuit([
         Branch("a", 1, 2, C=1), Branch("b", 2, 1, C=1),
         Branch("c", 2, 3, C=1), Branch("d", 2, 3, C=1),
-    ], ground=0)
-    assert list(spanning_trees(circuit)) == [("a", "c"), ("a", "d"), ("b", "c"), ("b", "d")]
+    ])
+    assert sorted(spanning_trees(circuit)) == [("a", "c"), ("a", "d"), ("b", "c"), ("b", "d")]
     for tree in spanning_trees(circuit):
-        assert Loops(circuit, fundamental_cycles(circuit)).G.shape == (2, 4)
+        assert Loops.from_tree(circuit, tree).G.shape == (2, 4)
+
+
+def test_cycle_bases_expand_parallel_branches():
+    from circuit_quantization import cycle_bases
+    circuit = Circuit([
+        Branch("a", 1, 2, C=1), Branch("b", 2, 1, C=1),
+        Branch("c", 2, 3, C=1), Branch("d", 3, 1, C=1),
+    ])
+    assert list(cycle_bases(circuit)) == [
+        {"loop_1": ("a", "b"), "loop_2": ("a", "c", "d")},
+        {"loop_1": ("a", "b"), "loop_2": ("b", "c", "d")},
+        {"loop_1": ("a", "c", "d"), "loop_2": ("b", "c", "d")},
+    ]
+
+
+def test_cycle_bases_primitive_excludes_the_three_squares_of_K4():
+    from itertools import combinations
+    from circuit_quantization import cycle_bases
+    circuit = Circuit([Branch(f"C{u}{v}", u, v, C=1) for u, v in combinations(range(4), 2)], ground=0)
+    primitive, full = list(cycle_bases(circuit)), list(cycle_bases(circuit, primitive=False))
+    # Seven simple loops (four triangles, three squares); 29 of the 35 triples span the cycle space.
+    assert (len(primitive), len(full)) == (28, 29)
+    squares = [basis for basis in full if basis not in primitive]
+    assert [len(loop) for loop in squares[0].values()] == [4, 4, 4]  # the squares sum to twice the cycle space
+    for basis in full:
+        assert Loops.from_branch_dict(circuit, basis).G.rows == 3
 
 
 def test_different_spanning_trees_can_give_the_same_cycle_matrix():
@@ -227,23 +267,24 @@ def test_different_spanning_trees_can_give_the_same_cycle_matrix():
     trees = list(spanning_trees(circuit))
     assert len(trees) == 3
     for tree in trees:
-        cycles = fundamental_cycles(circuit, tree)
-        assert Loops(circuit, cycles).G == sym.Matrix([[1, 1, 1]])
-        assert set(tree) == set(circuit.branch_names) - set(cycles)
+        closure, G = tree_to_G(circuit, tree)
+        assert G == sym.Matrix([[1, 1, 1]])
+        assert set(tree) == set(circuit.branch_names) - set(closure)
 
 
 def test_loop_tuples_infer_orientation_and_roundtrip():
     circuit = harmonium()
     labels = {"k": ("J1", "J2", "L1", "L2"), "f": ("J3", "L3"),
               "cb": ("C", "J1", "J3", "L1")}
-    loops = Loops(circuit, labels, {"cb": 0})
-    expected = Loops(circuit, HARMONIUM_CYCLES, {"cb": 0})
+    loops = Loops.from_branch_dict(circuit, labels, {"cb": 0})
+    expected = Loops.from_branch_dict(circuit, HARMONIUM_CYCLES, {"cb": 0})
     assert loops.G == expected.G
-    assert loops.branch_dict == labels
+    assert {k: set(v) for k, v in loops.branch_dict.items()} == {k: set(v) for k, v in labels.items()}  # order lives in G
+    assert Loops.from_branch_dict(circuit, loops.branch_dict).G == loops.G
     assert loops.G * incidence(circuit).T == sym.zeros(3, 5)
     flipped = loops.rebase(-loops.G)
-    assert Loops(circuit, flipped.branch_dict).G == flipped.G
-    reversed_f = Loops(circuit, {**labels, "f": ("L3", "J3")})
+    assert Loops.from_branch_dict(circuit, flipped.branch_dict).G == flipped.G
+    reversed_f = Loops.from_branch_dict(circuit, {**labels, "f": ("L3", "J3")})
     assert reversed_f.G[1, :] == -loops.G[1, :]
 
 
@@ -253,13 +294,13 @@ def test_default_loop_constructor_prints_closure_first_tuples(capsys):
     repeated = Loops.from_circuit(circuit)
     assert repeated.branch_dict == loops.branch_dict
     assert repeated.G == loops.G
-    assert loops.G == Loops(circuit, fundamental_cycles(circuit)).G
-    assert all(labels[0] == name for name, labels in loops.branch_dict.items())
+    assert loops.G == Loops.from_tree(circuit, default_tree(circuit)).G
+    assert all(next(iter(labels)) == name for name, labels in loops.branch_dict.items())
     output = capsys.readouterr().out
     for name in loops.names:
         assert f"{name}: +{name}" in output
         assert f"flux = Phi_{name}" in output
-    assert Loops(circuit, loops.branch_dict).G == loops.G
+    assert Loops.from_branch_dict(circuit, loops.branch_dict).G == loops.G
 
 
 @pytest.mark.parametrize("labels, message", [
@@ -271,7 +312,7 @@ def test_default_loop_constructor_prints_closure_first_tuples(capsys):
 ])
 def test_loop_tuples_reject_invalid_support(labels, message):
     with pytest.raises(ValueError, match=message):
-        Loops(harmonium(), {"bad": labels})
+        Loops.from_branch_dict(harmonium(), {"bad": labels})
 
 
 def test_default_loop_constructor_accepts_tree_circuit(capsys):
@@ -299,7 +340,7 @@ def test_zero_capacitive_preserves_explicit_fluxes_and_includes_sources(capsys):
     assert sum(flux != 0 for flux in loops.Phi_ext) == 2
     name = next(name for name, flux in zip(loops.names, loops.Phi_ext) if flux == 0)
     supplied = {name: sym.Symbol("drive", real=True)}
-    overridden = Loops(circuit, loops.branch_dict, supplied)
+    overridden = Loops.from_branch_dict(circuit, loops.branch_dict, supplied)
     assert overridden.Phi_ext[overridden.names.index(name)] == supplied[name]
     assert len(supplied) == 1  # caller's dictionary is unchanged
 
@@ -309,3 +350,32 @@ def test_inductor_capacitance_does_not_break_superconducting_loop(capsys):
     loops = Loops.from_circuit(circuit, zero_capacitive=True)
     assert loops.variables == (sym.Symbol("Phi_L1", real=True),)
     assert "[superconducting]" in capsys.readouterr().out
+
+
+def test_closure_branches_follow_tree_and_survive_only_identity_rebases():
+    circuit = harmonium()
+    loops = Loops.from_tree(circuit, default_tree(circuit))
+    assert loops.closure_branches == loops.names
+    assert loops.rebase(loops.G, names=("a", "b", "c")).closure_branches == loops.closure_branches
+    assert loops.rebase(-loops.G).closure_branches is None
+    assert Loops(circuit, loops.G).closure_branches is None
+    with pytest.raises(ValueError, match="identity columns"):
+        Loops(circuit, loops.G, closure_branches=loops.closure_branches[::-1])
+
+
+def test_branch_dict_roundtrip_preserves_an_all_negative_loop_orientation():
+    # A directed triangle admits either overall sign (eq:G_OmegaT).
+    # In particular, a valid loop need not contain a positive branch at all.
+    circuit = Circuit([
+        Branch("a", 0, 1, C=1), Branch("b", 1, 2, C=1), Branch("c", 2, 0, C=1),
+    ], ground=0)
+    flux = sym.Symbol("Phi_ring", real=True)
+    forward = Loops.from_branch_dict(circuit, {"ring": ("a", "b", "c")}, {"ring": flux})
+    reverse = forward.rebase(-forward.G, names=("ring",))
+    assert reverse.G == sym.Matrix([[-1, -1, -1]])
+    assert reverse.Phi_ext == sym.Matrix([-flux])  # eq:G_basis_change
+    rebuilt = Loops.from_branch_dict(circuit, reverse.branch_dict, {"ring": -flux})
+    # branch_dict promises this exact roundtrip; flipping G while keeping the
+    # supplied flux reverses the physical flux rather than merely relabeling it.
+    assert rebuilt.G == reverse.G
+    assert rebuilt.Phi_ext == reverse.Phi_ext

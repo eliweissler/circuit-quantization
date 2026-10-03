@@ -2,8 +2,8 @@
 
 Source checkout: eb67c34. Ported test_var_trans_basis, the singular-Z case,
 test_decouple_column, and the automatic/explicit test_symbolic_hamiltonian case.
-No runtime dependency on sircuitenum. An isolated reference ground retains its
-floating-node convention; sigma maps to cy. Assert physical invariants rather
+No runtime dependency on sircuitenum. Circuits are floating (no ground);
+the center-of-charge mode sigma maps to cy. Assert physical invariants rather
 than a particular basis ordering, Hamiltonian hash, or LaTeX representation.
 """
 
@@ -13,7 +13,7 @@ import pytest
 import sympy as sym
 
 import circuit_quantization as cq
-from circuit_quantization.modes import _decouple_column
+from circuit_quantization.modes import _decouple_block
 
 
 # Element strings denote parallel elements on an edge; J carries intrinsic C_J.
@@ -42,7 +42,7 @@ def circuit_from_edges(elements, edges, equal):
                       "J": {"C": value("CJ"), "EJ": value("EJ")},
                       "L": {"L": value("L")}}[kind]
             branches.append(cq.Branch(f"{kind}{i}", tail, head, **params))
-    return cq.Circuit(branches, ground="reference")
+    return cq.Circuit(branches)
 
 
 def zero(matrix):
@@ -58,9 +58,7 @@ def test_mode_basis_and_decoupling(name, elements, edges, expected, equal):
         assert Counter(types) == Counter(expected.split())
     assert Z.det() != 0
     assert not Z.has(sym.nan, sym.zoo, sym.oo, -sym.oo)
-    cq.check_basis(lag, Z, types)
     coords = cq.decouple(lag, Z, types)
-    cq.check_coordinates(lag, coords)
     assert zero(coords.C_tilde * coords.C_tilde_inv - sym.eye(coords.Z.cols))
     free = Z[:, [i for i, t in enumerate(types) if t in ("fr", "cy")]]
     frozen = Z[:, [i for i, t in enumerate(types) if t in ("fz", "cy")]]
@@ -77,14 +75,14 @@ def test_transmon_molecule_decouple_column(equal):
     Z = sym.Matrix([[half, 0, 1, 1], [-half, 0, 1, 1], [0, half, 0, 1], [0, -half, 0, 1]])
     discarded = Z[:, 2:]
     assert (discarded.T * lag.C_int * discarded).det() == 0
-    retained = sym.Matrix.hstack(*(_decouple_column(Z[:, i], discarded, lag.C_int) for i in range(2)))
+    retained = _decouple_block(Z[:, :2], discarded, lag.C_int)
     assert zero(retained.T * lag.C_int * discarded)
     assert zero(lag.omega_J_int.T * (retained - Z[:, :2]))
 
 
 def test_automatic_and_explicit_hamiltonian_agree():
     circuit = circuit_from_edges(["CL", "JL"], [(0, 2), (1, 2)], equal=False)
-    loops = cq.Loops(circuit, cq.fundamental_cycles(circuit))
+    loops = cq.Loops.from_tree(circuit, cq.default_tree(circuit))
     automatic = cq.quantize(circuit, loops)
     Z, types = cq.mode_basis(automatic.lag)
     explicit = cq.quantize(circuit, loops, Z, types)

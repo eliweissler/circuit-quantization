@@ -2,11 +2,11 @@ import pytest
 import sympy as sym
 
 from circuit_quantization import (
-    Branch, Circuit, check_basis, check_coordinates, decouple, lagrangian, mode_basis,
+    Branch, Circuit, check_coordinates, decouple, lagrangian, mode_basis,
     mode_dimensions,
     residual_freedom, transform,
 )
-from circuit_quantization.modes import _decouple_column, subspaces
+from circuit_quantization.modes import _decouple_block, subspaces
 from circuits import (
     COUPLED_ZERO_PI_TYPES, COUPLED_ZERO_PI_Z, HARMONIUM_Z, RHOMBUS_Z, ZERO_PI_Z,
     coupled, coupled_zero_pis, harmonium, kite, pos, rhombus, zero_pi,
@@ -14,11 +14,8 @@ from circuits import (
 
 
 def validate(lag, Z, types):
-    """The checks quantize runs: check_basis, decouple, check_coordinates."""
-    check_basis(lag, Z, types)
-    coords = decouple(lag, Z, types)
-    check_coordinates(lag, coords)
-    return coords
+    """What quantize runs on an explicit basis: decouple, which checks the result."""
+    return decouple(lag, Z, types)
 
 
 def zero(M):
@@ -51,12 +48,12 @@ def test_automatic_kite_basis_separates_the_harmonic_direction():
     (("e", "e", "e", "e"), "not a valid 'e'"),  # the compact column lies in N(L*)
     (("h", "e", "e", "e"), "not a valid 'h'"),
 ])
-def test_check_basis_rejects_wrong_types(types, message):
+def test_check_rejects_wrong_types(types, message):
     with pytest.raises(ValueError, match=message):
         validate(lagrangian(harmonium()), HARMONIUM_Z, types)
 
 
-def test_check_basis_rejects_non_primitive_compact_lattice():
+def test_check_rejects_non_primitive_compact_lattice():
     Z = HARMONIUM_Z.copy()
     Z[:, 0] = Z[:, 0] / 2
     with pytest.raises(ValueError, match="integer|primitive"):
@@ -227,7 +224,7 @@ def test_transform_rejects_disallowed_mixing(S, message):
         transform(lag, coords, S)
 
 
-def test_check_basis_rejects_harmonic_direction_labelled_extended():
+def test_check_rejects_harmonic_direction_labelled_extended():
     lag = lagrangian(kite())
     Z, _ = mode_basis(lag)  # third column is the harmonic direction
     with pytest.raises(ValueError, match="not a valid 'e'"):
@@ -258,9 +255,9 @@ def test_dynamical_columns_are_checked_after_decoupling():
     circuit = Circuit([Branch("J", 1, 0, C=1, EJ=1), Branch("L", 2, 0, L=1)], ground=0)
     lag = lagrangian(circuit)
     Z = sym.Matrix([[1, 0], [1, 1]])  # compact column carries a frozen component
-    assert check_basis(lag, Z, ("c", "fz")) is None  # checks only; decoupling is a separate step
+    with pytest.raises(ValueError, match="not a valid 'c'"):  # before decoupling the column looks extended
+        check_coordinates(lag, Z, ("c", "fz"))
     coords = decouple(lag, Z, ("c", "fz"))
-    check_coordinates(lag, coords)
     assert coords.Z == sym.Matrix([1, 0])  # eq:decouple_final_L removes the frozen part
 
 
@@ -273,7 +270,7 @@ def test_transform_recovers_harmonic_axis_after_extended_mixing():
     restored = transform(lag, mixed, S.inv())
     assert restored.types == ("c", "e", "h")
     assert zero(restored.Z - original.Z)
-    check_coordinates(lag, restored)
+    check_coordinates(lag, restored.Z_full, restored.types_full)
 
 
 @pytest.mark.parametrize("build", [coupled, zero_pi, rhombus])
@@ -316,14 +313,43 @@ def test_equal_elements_decouple_with_singular_discarded_capacitance():
 ])
 def test_serial_decoupling_updates_remaining_columns_and_skips_null_pivots(form, expected):
     Z = sym.eye(3)
-    retained = _decouple_column(Z[:, 0], Z[:, 1:], form)
+    retained = _decouple_block(Z[:, :1], Z[:, 1:], form)
     assert retained == expected
     assert zero(retained.T * form * Z[:, 1:])
 
 
-def test_check_basis_recognises_a_disguised_zero_in_a_symbolic_column():
+def test_check_recognises_a_disguised_zero_in_a_symbolic_column():
     # a/(a+b) + b/(a+b) - 1 is zero, but only after cancellation.
     a, b = pos("a b")
     Z = RHOMBUS_Z.copy()
     Z[:, 3] = Z[:, 3] + (a / (a + b) + b / (a + b) - 1) * sym.Matrix([1, 0, 0, 0])
-    check_basis(lagrangian(rhombus()), Z, ("c", "c", "c", "fr"))
+    validate(lagrangian(rhombus()), Z, ("c", "c", "c", "fr"))
+
+
+def test_compact_period_validation_does_not_round_exact_rationals():
+    # eq:compact_period_lattice requires exact integral junction windings.
+    # A nearly integral winding still changes the Josephson potential at 2*pi.
+    circuit = Circuit([Branch("J", 1, 0, C=1, EJ=1)], ground=0)
+    lag = lagrangian(circuit)
+    winding = 1 + sym.Rational(1, 10**20)
+    assert winding.is_integer is False
+    check_coordinates(lag, sym.eye(1), ("c",))
+    with pytest.raises(ValueError, match="integer|primitive"):
+        check_coordinates(lag, sym.Matrix([[winding]]), ("c",))
+
+
+def test_unimodular_compact_shear_requires_exact_integer_entries():
+    # det S = 1 alone is insufficient for eq:Scc_unimodular: both S and
+    # S^{-1} must preserve the integer Cooper-pair lattice exactly.
+    circuit = Circuit([
+        Branch("J1", 1, 0, C=1, EJ=2), Branch("J2", 2, 0, C=3, EJ=5),
+    ], ground=0)
+    lag = lagrangian(circuit)
+    coords = decouple(lag, *mode_basis(lag))
+    integral = sym.Matrix([[1, 1], [0, 1]])
+    valid = transform(lag, coords, integral)
+    assert valid.Z == coords.Z * integral
+    almost_integral = sym.Matrix([[1, 1 + sym.Rational(1, 10**20)], [0, 1]])
+    assert almost_integral.det() == 1
+    with pytest.raises(ValueError, match="GL"):
+        transform(lag, coords, almost_integral)

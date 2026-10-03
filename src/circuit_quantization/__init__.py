@@ -3,7 +3,8 @@
 Companion code to the circuit quantization notes; each module follows one section:
 
     units.py        Sec VI   constants and converters
-    circuit.py      Sec I    Branch, Circuit, Loops, cycle_bases, fundamental_cycles
+    circuit.py      Sec I    Branch, Circuit, incidence
+    loops.py        Sec I.C  Loops, branch_dict_to_G, check_loops, cycle_bases, default_tree, spanning_trees, tree_to_G
     lagrangian.py   Sec II   element and incidence matrices
     modes.py        Sec III  mode classification, decoupling, residual freedom
     flux.py         Sec V    irrotational flux assignment
@@ -27,13 +28,13 @@ Symbols in the notes and their names here:
     H                   Hamiltonian H/h [GHz]
 """
 
-from .circuit import Branch, Circuit, Loops, cycle_bases, fundamental_cycles, incidence, spanning_trees
+from .circuit import Branch, Circuit, incidence
 from .draw import draw_circuit_diagram
 from .flux import irrotational_B
 from .hamiltonian import hamiltonian, simplify_hamiltonian
 from .lagrangian import lagrangian
+from .loops import Loops, branch_dict_to_G, check_loops, cycle_bases, default_tree, spanning_trees, tree_to_G
 from .modes import (
-    check_basis,
     check_coordinates,
     coordinates,
     decouple,

@@ -62,7 +62,7 @@ def test_floating_topology_and_hierarchy():
     circuit = Circuit([
         Branch("J1", "a", "b", C=ghz_to_farad(1), EJ=7),
         Branch("J2", "b", "c", C=ghz_to_farad(2), EJ=8),
-    ], ground="g")
+    ])
     exported = to_scqubits(circuit, cutoff=8, trunc_num=[3, 4])
     assert not exported.is_grounded
     assert exported.system_hierarchy == [[1], [2]]

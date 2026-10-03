@@ -7,7 +7,8 @@ Each module follows one section of the notes, and comments cite the notes' equat
 | Module | Notes | Contents |
 |---|---|---|
 | `units.py` | Sec VI | exact SI constants, `ghz_to_farad`, `ghz_to_henry`, ... |
-| `circuit.py` | Sec I, App A | `Branch`, `Circuit`, incidence matrix, `fundamental_cycles`, `Loops` |
+| `circuit.py` | Sec I | `Branch`, `Circuit`, incidence matrix |
+| `loops.py` | Sec I.C, App A | `Loops`, `tree_to_G`, `branch_dict_to_G`, `spanning_trees` |
 | `lagrangian.py` | Sec II | `C_b`, `C_int`, `C_int_src`, `Lstar_int`, `omega_J_int`, ... |
 | `modes.py` | Sec III | mode classification, decoupling and truncation, residual freedom `S_1` |
 | `flux.py` | Sec V | irrotational flux assignment `B` |
@@ -29,8 +30,8 @@ fluxonium = Circuit([
     Branch("L", 1, 0, L=cq.ghz_to_henry(EL)),
 ], ground=0)
 
-cycles = cq.fundamental_cycles(fluxonium)          # {"L": {"J": -1, "L": 1}}
-loops = Loops(fluxonium, cycles, {"L": cq.phase_to_weber(varphi_ext)})
+# One loop, closed by L and named after it: G = [[-1, 1]] in branch order (J, L).
+loops = Loops.from_tree(fluxonium, cq.default_tree(fluxonium), {"L": cq.phase_to_weber(varphi_ext)})
 res = quantize(fluxonium, loops)
 res            # renders H_GHz in a notebook
 res.ham.E_C, res.B # intermediate matrices use their notes names
@@ -46,14 +47,14 @@ loop with signed branches, classification, and assigned flux:
 
 ```python
 loops = Loops.from_circuit(fluxonium)  # L: +L -J [superconducting]; flux = Phi_L
-loops.branch_dict                    # dict[str, tuple[str, ...]]
-loops = Loops(fluxonium, {"f": ("J", "L")}, {"f": 0})
+loops.branch_dict                    # dict[str, dict[str, int]], signed
+loops = Loops.from_branch_dict(fluxonium, {"f": ("J", "L")}, {"f": 0})
 ```
 
 Pass `zero_capacitive=True` to default every loop containing a capacitor or
 voltage-source branch to zero flux. For custom fluxes, use
-`Loops(circuit, branch_dict, fluxes=...)`. For a custom tree, use
-`Loops(circuit, cq.fundamental_cycles(circuit, tree=tree), fluxes=...)`.
+`Loops.from_branch_dict(circuit, branch_dict, fluxes=...)`. For a custom tree, use
+`Loops.from_tree(circuit, tree, fluxes=...)`.
 Junction capacitance and an inductor's parallel capacitance
 do not break a superconducting loop. The default remains `False`, so setting
 these physical fluxes to zero is an explicit choice.
@@ -75,7 +76,7 @@ source = Branch("V1", 2, 0)    # real V_1 [V], either sign allowed
 
 circuit = Circuit([junction, inductor], ground=0)
 CJ1, EJ1, L1 = circuit.variables
-loops = Loops(circuit, {"k": {"J1": 1, "L1": -1}})
+loops = Loops.from_branch_dict(circuit, {"k": {"J1": 1, "L1": -1}})
 Phi_k, = loops.variables       # real Phi_k [Wb]
 ```
 
@@ -151,8 +152,7 @@ cq.subs_constants(res.H).evalf(6)  # decimal coefficients
 
 ```python
 for tree in cq.spanning_trees(circuit):
-    cycles = cq.fundamental_cycles(circuit, tree=tree)
-    candidate = Loops(circuit, cycles)
+    candidate = Loops.from_tree(circuit, tree)
     # Existing physical fluxes must be rebased along with G:
     rebased = loops.rebase(candidate.G, names=candidate.names)
 ```

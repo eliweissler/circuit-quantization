@@ -4,7 +4,7 @@ import pytest
 import sympy as sym
 
 from circuit_quantization import (
-    Loops, check_basis, check_coordinates, decouple, fundamental_cycles, hamiltonian, irrotational_B,
+    Loops, decouple, default_tree, hamiltonian, irrotational_B,
     lagrangian, mode_basis, residual_freedom, transform,
 )
 from circuit_quantization.units import Phi0, e, h_GHz
@@ -19,10 +19,8 @@ def build(circuit, loops=None):
     Z, types = mode_basis(lag)
     if not set(types) & {"c", "e", "h"}:
         pytest.skip("no dynamical modes")
-    check_basis(lag, Z, types)
     coords = decouple(lag, Z, types)
-    check_coordinates(lag, coords)
-    loops = loops or Loops(circuit, fundamental_cycles(circuit))
+    loops = loops or Loops.from_tree(circuit, default_tree(circuit))
     B = irrotational_B(lag, coords, loops)
     return lag, types, coords, loops, B, hamiltonian(lag, coords, loops, B, circuit.t)
 

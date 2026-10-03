@@ -28,7 +28,7 @@ def test_harmonium_dimensionless_hamiltonian():
     vk, vf = sym.symbols("varphi_k varphi_f", real=True)
     circuit = harmonium_in_ghz()
     fluxes = {"k": cq.phase_to_weber(vk), "f": cq.phase_to_weber(vf), "cb": 0}
-    res = quantize(circuit, Loops(circuit, HARMONIUM_CYCLES, fluxes), HARMONIUM_Z, ("c", "e", "e", "e"))
+    res = quantize(circuit, Loops.from_branch_dict(circuit, HARMONIUM_CYCLES, fluxes), HARMONIUM_Z, ("c", "e", "e", "e"))
     p1, p2, p3, p4 = res.ham.varphi
     n1, n2, n3, n4 = res.ham.n
     ng = sym.Symbol("n_g1", real=True)
@@ -52,7 +52,7 @@ def test_kite_charging_matrix():
             b.name, b.tail, b.head, C=cq.ghz_to_farad({"CS": ECS, "J1": EC1, "J2": EC2}[b.name]), EJ=b.EJ)
         for b in circuit.branches
     ], ground=4)
-    res = quantize(circuit_ghz, Loops(circuit_ghz, KITE_CYCLES, {"cb": 0}), KITE_Z, ("c", "e", "e"))
+    res = quantize(circuit_ghz, Loops.from_branch_dict(circuit_ghz, KITE_CYCLES, {"cb": 0}), KITE_Z, ("c", "e", "e"))
     s, d = (EC1 + EC2) / 4, (EC1 - EC2) / 4
     expected = sym.Matrix([[ECS, 0, ECS], [0, s, d], [ECS, d, ECS + s]])  # eq:kite_Cinv in GHz
     assert (res.ham.E_C - expected).applyfunc(sym.simplify).is_zero_matrix
@@ -62,8 +62,8 @@ def test_voltage_drive_offset_charge_sign():
     # Q_g = -C_int,src V (eq:Qg): a positive gate voltage gives n_g = -C_g V / 2e.
     CJ, Cg, V = pos("C_J C_g V")
     circuit = Circuit([Branch("J", 1, 0, C=CJ, EJ=1), Branch("Cg", 1, 2, C=Cg), Branch("V", 0, 2, V=V)], ground=0)
-    cycles = cq.fundamental_cycles(circuit)  # one loop J -> V -> Cg, no flux
-    res = quantize(circuit, Loops(circuit, cycles, {name: 0 for name in cycles}))
+    closure, G = cq.tree_to_G(circuit, cq.default_tree(circuit))  # one loop J -> V -> Cg, no flux
+    res = quantize(circuit, Loops(circuit, G, closure, closure, dict.fromkeys(closure, 0)))
     sector = sym.Symbol("n_g1", real=True)
     assert sym.simplify(res.ham.n_g[0] - (sector - Cg * V / (2 * cq.units.e))) == 0
 
@@ -72,14 +72,14 @@ def test_time_dependent_flux_leaves_no_emf_drive():
     C1, C2 = pos("C_1 C_2")
     circuit = Circuit([Branch("J1", 1, 0, C=C1, EJ=1), Branch("J2", 1, 0, C=C2, EJ=1)], ground=0)
     Phi = sym.Function("Phi")(circuit.t)
-    res = quantize(circuit, Loops(circuit, {"sq": {"J1": 1, "J2": -1}}, {"sq": Phi}))
+    res = quantize(circuit, Loops.from_branch_dict(circuit, {"sq": {"J1": 1, "J2": -1}}, {"sq": Phi}))
     assert not res.ham.n_g.has(sym.Derivative)
     assert res.H.has(Phi)
 
 
 def test_result_exposes_named_matrices_and_latex():
     circuit = kite()
-    res = quantize(circuit, Loops(circuit, KITE_CYCLES, {"cb": 0}), KITE_Z, ("c", "e", "e"))
+    res = quantize(circuit, Loops.from_branch_dict(circuit, KITE_CYCLES, {"cb": 0}), KITE_Z, ("c", "e", "e"))
     assert res.coords.Z == KITE_Z
     assert res.lag.C_int.shape == (3, 3)
     assert r"H_{\mathrm{GHz}}" in res._repr_latex_()
@@ -87,7 +87,7 @@ def test_result_exposes_named_matrices_and_latex():
 
 def test_transmon_without_loops_and_with_float_parameters():
     circuit = Circuit([Branch("J", "island", "gnd", C=97e-15, EJ=15.0)], ground="gnd")
-    res = quantize(circuit, Loops(circuit, {}))
+    res = quantize(circuit, Loops.from_branch_dict(circuit, {}))
     assert res.coords.types == ("c",)
     assert res.B.shape == (1, 0)
     assert abs(float(cq.subs_constants(res.ham.E_C[0, 0])) - float(cq.subs_constants(cq.farad_to_ghz(97e-15)))) < 1e-12
@@ -95,8 +95,8 @@ def test_transmon_without_loops_and_with_float_parameters():
 
 def test_lc_oscillator_is_harmonic():
     circuit = Circuit([Branch("C", 1, 0, C=cq.ghz_to_farad(0.2)), Branch("L", 1, 0, L=cq.ghz_to_henry(0.5))], ground=0)
-    cycles = cq.fundamental_cycles(circuit)
-    res = quantize(circuit, Loops(circuit, cycles, {name: 0 for name in cycles}))
+    closure, G = cq.tree_to_G(circuit, cq.default_tree(circuit))
+    res = quantize(circuit, Loops(circuit, G, closure, closure, dict.fromkeys(closure, 0)))
     assert res.coords.types == ("h",)
     assert sym.nsimplify(res.ham.E_L[0, 0]) == sym.Rational(1, 2)
 
@@ -105,18 +105,18 @@ def test_float_parameters_in_circuits_with_loops_and_free_modes():
     # Floats are rationalized at input, so exact-zero checks hold (Review Focus 1).
     squid = Circuit([Branch("J1", 1, 0, C=41.7e-15, EJ=12.3), Branch("J2", 1, 0, C=13.1e-15, EJ=7.7),
                      Branch("Cs", 1, 0, C=73.3e-15)], ground=0)
-    res = quantize(squid, Loops(squid, cq.fundamental_cycles(squid)))
+    res = quantize(squid, Loops.from_tree(squid, cq.default_tree(squid)))
     assert abs(float(cq.subs_constants(res.ham.E_C[0, 0])) - float(cq.subs_constants(cq.farad_to_ghz(128.1e-15)))) < 1e-9
     floating = Circuit([Branch("J", 1, 2, C=5e-15, EJ=10.0), Branch("C1", 1, 0, C=30e-15),
                         Branch("C2", 2, 0, C=40e-15)], ground=0)
-    cycles = cq.fundamental_cycles(floating)
-    res = quantize(floating, Loops(floating, cycles, {name: 0 for name in cycles}))
+    closure, G = cq.tree_to_G(floating, cq.default_tree(floating))
+    res = quantize(floating, Loops(floating, G, closure, closure, dict.fromkeys(closure, 0)))
     assert res.coords.types == ("c",)
 
 
 def test_quantize_requires_basis_and_types_together():
     circuit = kite()
-    loops = Loops(circuit, KITE_CYCLES, {"cb": 0})
+    loops = Loops.from_branch_dict(circuit, KITE_CYCLES, {"cb": 0})
     for kwargs in ({"Z_full": KITE_Z}, {"types": ("c", "e", "e")}):
         with pytest.raises(ValueError, match="supplied together"):
             quantize(circuit, loops, **kwargs)
@@ -127,18 +127,18 @@ def test_quantize_rebuilds_charging_energy_for_changed_circuit():
         return Circuit([Branch("J", 1, 0, C=C, EJ=1)], ground=0)
 
     a, b = transmon(1), transmon(2)
-    first = quantize(a, Loops(a, {}))
-    second = quantize(b, Loops(b, {}))
+    first = quantize(a, Loops.from_branch_dict(a, {}))
+    second = quantize(b, Loops.from_branch_dict(b, {}))
     assert second.ham.E_C == first.ham.E_C / 2
     with pytest.raises(TypeError, match="coords"):
-        quantize(b, Loops(b, {}), coords=first.coords)
+        quantize(b, Loops.from_branch_dict(b, {}), coords=first.coords)
     with pytest.raises(ValueError, match="loops must belong"):
-        quantize(b, Loops(a, {}))
+        quantize(b, Loops.from_branch_dict(a, {}))
 
 
 def test_result_transform_reclassifies_residual_mixing_and_preserves_hamiltonian():
     circuit = kite()
-    loops = Loops(circuit, KITE_CYCLES, {"cb": 0})
+    loops = Loops.from_branch_dict(circuit, KITE_CYCLES, {"cb": 0})
     original = quantize(circuit, loops)
     assert original.residual_freedom(keep_harmonic=False)[1, 2] != 0  # extended may mix into harmonic
     S = sym.Matrix([[1, 0, 0], [0, 1, 1], [0, 0, 1]])
@@ -164,7 +164,7 @@ def test_simplify_hamiltonian_factors_coefficients_and_combines_cosines():
 def test_quantize_optional_simplification_preserves_zero_pi_hamiltonian():
     from circuits import zero_pi, ZERO_PI_CYCLES, ZERO_PI_Z
     circuit = zero_pi()
-    loops = Loops(circuit, ZERO_PI_CYCLES, {"t1": 0, "t2": 0})
+    loops = Loops.from_branch_dict(circuit, ZERO_PI_CYCLES, {"t1": 0, "t2": 0})
     args = (circuit, loops, ZERO_PI_Z, ("e", "c", "h", "cy"))
     raw = quantize(*args)
     simplified = quantize(*args, simplify=True)
@@ -173,3 +173,70 @@ def test_quantize_optional_simplification_preserves_zero_pi_hamiltonian():
     assert len(simplified.H.atoms(sym.cos)) == 2
     assert all(len(c.args[0].free_symbols) == 1 for c in simplified.H.atoms(sym.cos))
     assert simplified.ham.E_C == raw.ham.E_C
+
+
+@pytest.mark.parametrize("time_dependent", [False, True], ids=["static", "driven"])
+def test_fluxonium_custom_B_puts_flux_on_junction(time_dependent):
+    from circuit_quantization.units import e
+
+    EC, EL, EJ = pos("E_C E_L E_J")
+    CJ = cq.ghz_to_farad(EC)
+    circuit = Circuit([
+        Branch("J", 1, 0, C=CJ, EJ=EJ),
+        Branch("L", 1, 0, L=cq.ghz_to_henry(EL)),
+    ], ground=0)
+    phase_ext = (sym.Function("varphi_ext", real=True)(circuit.t) if time_dependent
+                 else sym.Symbol("varphi_ext", real=True))
+    flux = cq.phase_to_weber(phase_ext)
+    loops = Loops.from_branch_dict(circuit, {"f": ("J", "L")}, {"f": flux})
+    assert circuit.branch_names == ("J", "L")
+    B_junction = sym.ImmutableMatrix([1, 0])  # G = [1, -1]
+    result = quantize(circuit, loops, B=B_junction)
+    default = quantize(circuit, loops)
+    assert result.B == B_junction
+    assert default.B == sym.Matrix([0, -1])
+    assert loops.G * result.B == sym.eye(1)
+
+    phase, charge = result.ham.varphi[0], result.ham.n[0]
+    ng = CJ * sym.diff(flux, circuit.t) / (2 * e)
+    expected = (4 * EC * (charge - ng)**2 + EL * phase**2 / 2
+                - EJ * sym.cos(phase + phase_ext))
+    assert sym.simplify(result.ham.n_g[0] - ng) == 0
+    assert default.ham.n_g == sym.zeros(1, 1)
+    assert sym.simplify(sym.expand(result.H - expected)) == 0
+    # Default gauge puts the flux on L, with its flux-only scalar omitted.
+    expected_default = (4 * EC * charge**2 + EL * phase**2 / 2
+                        - EL * phase * phase_ext - EJ * sym.cos(phase))
+    assert sym.simplify(sym.expand(default.H - expected_default)) == 0
+
+
+def test_custom_assignment_must_satisfy_the_loop_constraint():
+    circuit = Circuit([
+        Branch("J", 1, 0, C=1, EJ=2), Branch("L", 1, 0, L=3),
+    ], ground=0)
+    loops = Loops.from_branch_dict(circuit, {"f": ("J", "L")})
+    bad_B = sym.zeros(2, 1)
+    assert loops.G * bad_B != sym.eye(1)  # eq:GB_constraint
+    # The shape is correct, but accepting this assignment silently erases the
+    # specified loop flux. quantize is the only entry point that takes a B.
+    with pytest.raises(ValueError):
+        quantize(circuit, loops, B=bad_B)
+
+
+@pytest.mark.parametrize("scale", [1, 2], ids=["identity", "rescale"])
+def test_result_transform_preserves_an_existing_driven_assignment(scale):
+    circuit = Circuit([
+        Branch("J", 1, 0, C=cq.ghz_to_farad(2), EJ=3),
+        Branch("L", 1, 0, L=cq.ghz_to_henry(5)),
+    ], ground=0)
+    drive = sym.Function("flux_drive", real=True)(circuit.t)
+    loops = Loops.from_branch_dict(circuit, {"f": ("J", "L")}, {"f": drive})
+    original = quantize(circuit, loops, B=sym.Matrix([1, 0]))
+    S = sym.Matrix([[scale]])
+    # Sec III.C is a constant canonical relabeling, with the branch offsets held fixed.
+    transformed = original.transform(S)
+    assert transformed.B == original.B
+    substitution = dict(zip(original.ham.varphi, S * transformed.ham.varphi))
+    substitution.update(zip(original.ham.n, S.inv().T * transformed.ham.n))
+    expected = original.H.subs(substitution, simultaneous=True)
+    assert sym.simplify(transformed.H - expected) == 0

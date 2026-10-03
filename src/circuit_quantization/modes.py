@@ -31,6 +31,11 @@ class Coordinates:
     omega_L_tilde: sym.ImmutableMatrix  # Z^T omega_L_int
 
 
+def _cancel(M):
+    """Cancel each entry; the result is immutable."""
+    return sym.ImmutableMatrix(M).applyfunc(sym.cancel)
+
+
 # --- subspaces, each a matrix of basis columns ------------------------------
 
 
@@ -108,7 +113,7 @@ def mode_basis(lag):
 
 
 def _is_integer(x):
-    return sym.nsimplify(sym.simplify(x)).is_integer
+    return sym.simplify(x).is_integer  # exact: nsimplify would round 1 + 10**-20 to 1
 
 
 def mode_dimensions(lag):
@@ -125,51 +130,49 @@ def mode_dimensions(lag):
     return {t: sub[t].cols for t in TYPES}
 
 
-def check_basis(lag, Z_full, types):
-    """Check a square basis before decoupling (tab:var_basis).
+def check_coordinates(lag, Z_full, types):
+    """Check a decoupled full basis against tab:var_basis and eq:compact_period_lattice.
 
-    Z_full must be invertible and its non-dynamical columns must lie in their
-    subspaces.  The dynamical columns are checked by check_coordinates after
-    decouple, so Z_full need not be decoupled yet.
+    Decoupling changes neither the junction content of a column nor the
+    non-dynamical columns, so passing here also validates the basis given to decouple.
+    Every declared type must match mode_types, and the compact and non-dynamical
+    counts must match mode_dimensions; together with invertibility this leaves
+    at most dim h harmonic columns and a positive-definite C_tilde.
     """
-    Z = sym.Matrix(Z_full)
     n = lag.Omega_int.rows
-    types = tuple(types)
-    if Z.shape != (n, n) or len(types) != n:
-        raise ValueError(f"Z_full must be {n}x{n} with {n} types")
-    if set(types) - set(TYPES):
-        raise ValueError(f"Unknown mode types: {sorted(set(types) - set(TYPES))}")
-    if sym.simplify(Z.det()) == 0:
+    if Z_full.shape != (n, n) or len(types) != n:
+        raise ValueError(f"Z_full must be {n}x{n} with {n} types, including non-dynamical columns")
+    if sym.simplify(Z_full.det()) == 0:
         raise ValueError("Z_full is singular")
-    sub = subspaces(lag)
-    for j, t in enumerate(types):
-        if t in NONDYNAMICAL and not _contains(sub[{"fr": "JL", "fz": "C", "cy": "cy"}[t]], Z[:, j]):
-            raise ValueError(f"Column {j} is not a valid {t!r} direction (tab:var_basis)")
-    for t in NONDYNAMICAL:
-        if types.count(t) != sub[t].cols:
-            raise ValueError(f"Circuit has {sub[t].cols} {t!r} modes, Z_full declares {types.count(t)}")
-
-
-def check_coordinates(lag, coords):
-    """Check the decoupled dynamical columns against tab:var_basis and eq:compact_period_lattice."""
-    sub = subspaces(lag)
-    actual = mode_types(lag, coords.Z)
-    for j, (declared, inferred) in enumerate(zip(coords.types, actual)):
+    for j, (declared, inferred) in enumerate(zip(types, mode_types(lag, Z_full))):
         if declared != inferred:
-            raise ValueError(f"Retained column {j} is not a valid {declared!r} direction (tab:var_basis)")
-    types = coords.types
-    if types.count("c") != sub["c"].cols:
-        raise ValueError(f"Circuit has {sub['c'].cols} 'c' modes, coordinates declare {types.count('c')}")
-    if types.count("h") > sub["h"].cols:
-        raise ValueError(f"Circuit has at most {sub['h'].cols} 'h' modes, coordinates declare {types.count('h')}")
+            raise ValueError(f"Column {j} is not a valid {declared!r} direction (tab:var_basis)")
+    dims = mode_dimensions(lag)
+    for t in ("c", *NONDYNAMICAL):
+        if types.count(t) != dims[t]:
+            raise ValueError(f"Circuit has {dims[t]} {t!r} modes, Z_full declares {types.count(t)}")
     compact = [j for j, t in enumerate(types) if t == "c"]
     if compact:
-        W = (lag.omega_J_int.T * coords.Z[:, compact]).applyfunc(sym.simplify)  # omega_{J,c}^T
+        W = _cancel(lag.omega_J_int.T * Z_full[:, compact])  # omega_{J,c}^T
         if not all(_is_integer(x) for x in W):
             raise ValueError("omega_J,c^T must be integer (Sec IV.B.1)")
         minors = [sym.simplify(W.extract(list(rows), list(range(W.cols))).det()) for rows in combinations(range(W.rows), W.cols)]
         if reduce(gcd, (int(m) for m in minors), 0) != 1:
             raise ValueError("Compact periods are not primitive (eq:compact_period_lattice)")
+
+
+def _check_residual(types, S):
+    """S_1 is invertible, mixes only as eq:S1_structure allows, and S_cc lies in GL(N_c, Z)."""
+    if S.shape != (len(types), len(types)) or sym.simplify(S.det()) == 0:
+        raise ValueError("S1 must be square, invertible, and match the retained modes")
+    for i in range(S.rows):
+        for j in range(S.cols):
+            if S[i, j] != 0 and (types[i], types[j]) not in _S1b:
+                raise ValueError(f"S1[{i}, {j}] mixes {types[i]!r} into {types[j]!r} (eq:S1_structure)")
+    compact = [j for j, t in enumerate(types) if t == "c"]
+    S_cc = _cancel(S.extract(compact, compact))
+    if compact and (not all(_is_integer(x) for x in S_cc) or abs(S_cc.det()) != 1):
+        raise ValueError("S_cc must lie in GL(N_c, Z) (eq:Scc_unimodular)")
 
 
 # --- decoupling and truncation ----------------------------------------------
@@ -182,9 +185,7 @@ def mode_types(lag, Z):
     :param Z: Node-space columns, full or retained, in internal-node row order.
     :returns: Tuple of c, e, h, fr, fz, or cy labels in column order.
     """
-    Z = sym.Matrix(Z)
-    J, L, C = [(Z.T * mat).applyfunc(sym.cancel).tolist()
-               for mat in (lag.omega_J_int, lag.omega_L_int, lag.C_int)]
+    J, L, C = [_cancel(Z.T * mat).tolist() for mat in (lag.omega_J_int, lag.omega_L_int, lag.C_int)]
     return tuple(
         ("e" if any(l) else "c") if any(j) else
         ("h" if any(c) else "fz") if any(l) else
@@ -196,56 +197,53 @@ def mode_types(lag, Z):
 def coordinates(lag, Z_full, types=None):
     """Build retained objects from a full decoupled basis (eq:Z_truncated).
 
+    No validation; decouple runs check_coordinates first.
+
     :param lag: Node Lagrangian matrices.
     :param Z_full: Square decoupled node-to-coordinate matrix, including all
         non-dynamical columns. Use decouple first if the sectors are coupled.
     :param types: Optional labels for all columns; otherwise infer with mode_types.
     :returns: Coordinates retaining Z_full and types_full, with dynamical columns
         Z and corresponding rows R of the full inverse. Column order is preserved.
-    :raises ValueError: Invalid dimensions, no dynamical modes, or singular capacitance.
+    :raises ValueError: No dynamical modes.
     """
-    Z_full = sym.Matrix(Z_full)
-    n = lag.Omega_int.rows
-    if Z_full.shape != (n, n):
-        raise ValueError(f"Z_full must be {n}x{n}, including non-dynamical columns")
+    Z_full = sym.ImmutableMatrix(Z_full)
     types = mode_types(lag, Z_full) if types is None else tuple(types)
-    if len(types) != n or set(types) - set(TYPES):
-        raise ValueError("types must give one valid mode label per full-basis column")
     retained = [i for i, t in enumerate(types) if t in DYNAMICAL]
     if not retained:
         raise ValueError("Circuit has no dynamical modes")
     Z = Z_full[:, retained]
-    R = Z_full.inv()[retained, :]  # eq:Z_truncated
-    C_tilde = (Z.T * lag.C_int * Z).applyfunc(sym.cancel)
-    if sym.cancel(C_tilde.det()) == 0:
-        raise ValueError("Retained capacitance matrix is singular")
-    C_tilde_inv = C_tilde.inv().applyfunc(sym.cancel)
-    omega_J, omega_L = Z.T * lag.omega_J_int, Z.T * lag.omega_L_int
-    freeze = sym.ImmutableMatrix
+    C_tilde = _cancel(Z.T * lag.C_int * Z)
     return Coordinates(
-        Z_full=freeze(Z_full), types_full=types,
-        Z=freeze(Z), types=tuple(types[i] for i in retained),
-        R=freeze(sym.Matrix(R).applyfunc(sym.cancel)),
-        C_tilde=freeze(C_tilde),
-        C_tilde_inv=freeze(C_tilde_inv),
-        Lstar_tilde=freeze((Z.T * lag.Lstar_int * Z).applyfunc(sym.cancel)),
-        omega_J_tilde=freeze(omega_J), omega_L_tilde=freeze(omega_L),
+        Z_full=Z_full, types_full=types,
+        Z=Z, types=tuple(types[i] for i in retained),
+        R=_cancel(Z_full.inv()[retained, :]),  # eq:Z_truncated
+        C_tilde=C_tilde,
+        C_tilde_inv=_cancel(C_tilde.inv()),
+        Lstar_tilde=_cancel(Z.T * lag.Lstar_int * Z),
+        omega_J_tilde=Z.T * lag.omega_J_int, omega_L_tilde=Z.T * lag.omega_L_int,
     )
 
 
-def _decouple_column(v, nondynamical, form):
-    """Eliminate discarded columns in reverse order, updating all earlier columns."""
-    Z = sym.Matrix.hstack(v, nondynamical)
-    for i in range(Z.cols - 1, 0, -1):
+def _decouple_block(V, nondynamical, form):
+    """Make every column of V form-orthogonal to the nondynamical columns.
+
+    Eliminate one nondynamical column at a time, in reverse order, updating all
+    earlier columns, including the earlier nondynamical ones. A degenerate
+    sector therefore needs no inverse.
+    """
+    k = V.cols
+    Z = sym.Matrix.hstack(V, nondynamical)
+    for i in range(Z.cols - 1, k - 1, -1):
         w = Z[:, i]
         pivot = sym.cancel((w.T * form * w)[0])
         if pivot != 0:  # A null direction of this positive-semidefinite form needs no correction.
             Z[:, :i] = (Z[:, :i] - w * (w.T * form * Z[:, :i]) / pivot).applyfunc(sym.cancel)
-    return Z[:, 0]
+    return Z[:, :k]
 
 
-def decouple(lag, Z_full, types):
-    """Decouple one column at a time, then truncate (eq:ZY_blocks, Sec III.B).
+def decouple(lag, Z_full, types, *, check=True):
+    """Decouple the dynamical block, check, then truncate (eq:ZY_blocks, Sec III.B).
 
     Eliminate free directions in C and frozen directions in L* serially
     (eq:decouple_final, eq:decouple_final_L), updating the remaining columns.
@@ -254,21 +252,23 @@ def decouple(lag, Z_full, types):
     :param lag: Node Lagrangian matrices.
     :param Z_full: Full square node-to-coordinate basis.
     :param types: Mode label for each basis column.
+    :param bool check: Run check_coordinates on the decoupled basis. Skip only
+        for a basis that is valid by construction, such as mode_basis.
     :returns: Coordinates containing the retained columns of Z_dc, corresponding
         rows of its full inverse R = P Z_dc^{-1}, and transformed matrices.
+    :raises ValueError: An invalid basis or types, if check is True.
     """
     Z = sym.Matrix(Z_full)
-    sectors = [
-        (form, Z[:, [j for j, t in enumerate(types) if t == kind]])
-        for kind, form in (("fr", lag.C_int), ("fz", lag.Lstar_int))
-    ]
-    for j, t in enumerate(types):
-        if t not in DYNAMICAL:
-            continue
-        z = Z[:, j]
-        for form, nondynamical in sectors:
-            z = _decouple_column(z, nondynamical, form)
-        Z[:, j] = z.applyfunc(sym.cancel)
+    types = tuple(types)
+    dynamical = [j for j, t in enumerate(types) if t in DYNAMICAL]
+    Z_d = Z[:, dynamical]
+    for kind, form in (("fr", lag.C_int), ("fz", lag.Lstar_int)):
+        Z_d = _decouple_block(Z_d, Z[:, [j for j, t in enumerate(types) if t == kind]], form)
+    for col, j in enumerate(dynamical):
+        Z[:, j] = Z_d[:, col]
+    Z = _cancel(Z)
+    if check:
+        check_coordinates(lag, Z, types)
     return coordinates(lag, Z, types)
 
 
@@ -304,6 +304,7 @@ def transform(lag, coords, S1):
 
     The allowed mixing follows eq:S1_structure and eq:Scc_unimodular;
     cancellations can restore harmonic axes inside the extended block.
+    The new compact columns are Z_c S_cc, so their periods stay primitive.
 
     :param lag: Node Lagrangian for the same circuit as coords.
     :param coords: Current retained coordinates.
@@ -311,23 +312,11 @@ def transform(lag, coords, S1):
     :returns: New Coordinates with node matrix coords.Z * S1.
     :raises ValueError: Invalid dimensions, disallowed mixing, or nonprimitive compact periods.
     """
-    S = sym.Matrix(S1)
-    types = coords.types
-    if S.shape != (len(types), len(types)) or sym.simplify(S.det()) == 0:
-        raise ValueError("S1 must be square, invertible, and match the retained modes")
-    for i in range(S.rows):
-        for j in range(S.cols):
-            if S[i, j] != 0 and (types[i], types[j]) not in _S1b:
-                raise ValueError(f"S1[{i}, {j}] mixes {types[i]!r} into {types[j]!r} (eq:S1_structure)")
-    compact = [j for j, t in enumerate(types) if t == "c"]
-    S_cc = S.extract(compact, compact).applyfunc(sym.simplify)
-    if compact and (not all(_is_integer(x) for x in S_cc) or abs(S_cc.det()) != 1):
-        raise ValueError("S_cc must lie in GL(N_c, Z) (eq:Scc_unimodular)")
+    S = sym.ImmutableMatrix(S1)
+    _check_residual(coords.types, S)
     retained = [i for i, t in enumerate(coords.types_full) if t in DYNAMICAL]
-    Z_full = sym.Matrix(coords.Z_full)
+    Z_full = coords.Z_full.as_mutable()
     Z = coords.Z * S
     for j, index in enumerate(retained):
         Z_full[:, index] = Z[:, j]
-    new = coordinates(lag, Z_full)
-    check_coordinates(lag, new)
-    return new
+    return coordinates(lag, Z_full)

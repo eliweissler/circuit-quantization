@@ -45,14 +45,9 @@ def test_parallel_source_polarity_uses_group_endpoints():
 
 
 @pytest.mark.parametrize("layout", ["planar", "spring", "polygon"])
-def test_floating_ground_is_drawn_without_adding_a_connection(layout):
-    circuit = zero_pi()
-    drawing = draw_circuit_diagram(circuit, layout=layout)
-    ground = next(e for e in drawing.elements if isinstance(e, elm.Ground))
-    point = tuple(ground.absanchors["start"])
-    terminals = {tuple(e.absanchors[a]) for e in drawing.elements if isinstance(e, elm.Element2Term)
-                 for a in ("start", "end")}
-    assert point not in terminals
+def test_floating_circuit_draws_no_ground(layout):
+    drawing = draw_circuit_diagram(zero_pi(), layout=layout)
+    assert not any(isinstance(e, elm.Ground) for e in drawing.elements)
 
 
 @pytest.mark.parametrize("extension", ["svg", "pdf", "png"])

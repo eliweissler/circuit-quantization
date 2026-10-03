@@ -17,8 +17,8 @@ def draw_circuit_diagram(circuit, out=None, *, layout="planar", scale=4., spread
     length. label controls branch names; label_loc overrides node label sides.
     flux_labels maps text (including $math$) to (x, y) positions, multiplied by
     scale just like explicit node positions. These are display-only annotations.
-    Ground is drawn even when isolated. Voltage sources have + toward the source
-    node. Boxed junctions include intrinsic C; an inductor's C is shown in parallel.
+    Voltage sources have + toward the source node.
+    Boxed junctions include intrinsic C; an inductor's C is shown in parallel.
     Install the optional dependencies with ``pip install '.[draw]'``.
 
     :param circuit: Circuit to draw.
@@ -64,8 +64,6 @@ def draw_circuit_diagram(circuit, out=None, *, layout="planar", scale=4., spread
                 pos = {n: rotation @ p for n, p in pos.items()}
         shortest = min(np.linalg.norm(pos[a] - pos[b]) for a, b in graph.edges)
         pos = {n: p * scale / shortest for n, p in pos.items()}
-        if circuit.ground not in pos:
-            pos[circuit.ground] = np.min(list(pos.values()), axis=0) - [2, 1]
     if any(p.shape != (2,) or not np.isfinite(p).all() for p in pos.values()):
         raise ValueError("node positions must be finite (x, y) pairs")
     if len({tuple(p) for p in pos.values()}) != len(pos):
@@ -114,7 +112,7 @@ def draw_circuit_diagram(circuit, out=None, *, layout="planar", scale=4., spread
     for node, point in pos.items():
         dot = elm.Dot(radius=.07).at(point)
         if node_labels:
-            neighbors = [pos[n] - point for n in graph.neighbors(node)] if node in graph else []
+            neighbors = [pos[n] - point for n in graph.neighbors(node)]
             directions = [v / np.linalg.norm(v) for v in neighbors]
             side = min(sides, key=lambda s: max((np.dot(sides[s], v) for v in directions), default=0))
             dot.label(str(node), loc=(label_loc or {}).get(node, "left" if node == circuit.ground else side))
