@@ -1186,6 +1186,13 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
         tiebreaker_fn (callable): Function that takes a set of keys
                                    and returns a sortable item
                                    when choosing transformations.
+        names (list[str]): circuit_quantization: a label for each matrix in mats,
+                           used in the term keys (name, i, j). Defaults to "0", "1", ...
+        pattern_order (callable): circuit_quantization: takes the term keys, one
+                                  (name, i, j) per off-diagonal entry in mats order,
+                                  and returns (cost, term indices) candidates for
+                                  maximally_compatible_sol in non-decreasing cost.
+                                  Defaults to largest subsets first.
 
     Returns:
         sym.Matrix: Secondary transformation
@@ -1203,6 +1210,8 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     param_symbols = kwargs.get("param_symbols", ["C", "L", "J"])
 
     debug = kwargs.get("debug", False)
+    names = kwargs.get("names", [str(k) for k in range(len(mats))])
+    pattern_order = kwargs.get("pattern_order", None)
 
     # Record mode types
     comp = var_types.get("compact", [])
@@ -1240,11 +1249,13 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     # Symmetric coupling -> only consider upper triangle
     pairs = [(i, j) for (i, j) in itertools.product(range(n_d), repeat=2) if i < j]
     coupling = []
+    term_keys = []  # (name, i, j) for each entry of coupling
     zero_keys = []
     count = 0
 
-    for trMat in to_decouple:
+    for name, trMat in zip(names, to_decouple):
         for (i, j) in pairs:
+            term_keys.append((name, i, j))
             vars_in_eq = [v for v in var_list if v in trMat[i, j].free_symbols]
             # If it takes more than 1 second to determine equations for decoupling, then
             # assume it's unsolvable and move on to avoid long computation times
@@ -1281,7 +1292,8 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     all_keys, all_subs = maximally_compatible_sol(coupling,
                             nonzero_constraints=[_det_fast(Z_poly), Z_common_denom],
                             rational_only=True, stop_at_first=kwargs.get("stop_at_first", True),
-                            debug=debug, get_all_sols=True)
+                            debug=debug, get_all_sols=True,
+                            patterns=None if pattern_order is None else pattern_order(term_keys))
     # Cannot decouple anything
     if not all_keys:
         if return_tiebreaker:

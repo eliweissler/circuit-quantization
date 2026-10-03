@@ -2,7 +2,7 @@ import pytest
 import sympy as sym
 
 from circuit_quantization import (
-    Branch, Circuit, check_coordinates, decouple, lagrangian, mode_basis,
+    Branch, Circuit, check_coordinates, compact_charge_decoupling, decouple, lagrangian, mode_basis,
     mode_dimensions,
     residual_freedom, transform,
 )
@@ -199,7 +199,7 @@ def test_residual_freedom_patterns():
     b = residual_freedom(coords, keep_harmonic=False)
     nonzero = lambda S: [[int(x != 0) for x in S.row(i)] for i in range(3)]  # noqa: E731
     assert nonzero(a) == [[1, 1, 0], [0, 1, 0], [0, 1, 1]]  # S_{1,a}, eq:S1_structure
-    assert nonzero(b) == [[1, 1, 0], [0, 1, 1], [0, 1, 1]]  # S_{1,b}
+    assert nonzero(b) == [[1, 1, 1], [0, 1, 1], [0, 1, 1]]  # S_{1,b}: also c -> h, which makes h extended
 
 
 def test_transform_is_a_congruence_and_updates_types():
@@ -353,3 +353,23 @@ def test_unimodular_compact_shear_requires_exact_integer_entries():
     assert almost_integral.det() == 1
     with pytest.raises(ValueError, match="GL"):
         transform(lag, coords, almost_integral)
+
+
+@pytest.mark.parametrize("basis", ["notes", "automatic"])
+def test_compact_charge_decoupling_removes_the_compact_noncompact_charge_block(basis):
+    # Notes Strategy A, Sec 3.1: S = [[I, -X], [0, I]] with C_cc X = C_cn.
+    lag = lagrangian(harmonium())
+    coords = (decouple(lag, HARMONIUM_Z, ("c", "e", "e", "e")) if basis == "notes"
+              else decouple(lag, *mode_basis(lag), check=False))
+    c = [j for j, t in enumerate(coords.types) if t == "c"]
+    n = [j for j, t in enumerate(coords.types) if t != "c"]
+    assert not zero(coords.C_tilde.extract(c, n))  # harmonium starts charge-coupled
+    S = compact_charge_decoupling(coords)
+    assert S[:, c] == sym.eye(len(coords.types))[:, c]  # compact columns, hence periods, unchanged
+    new = transform(lag, coords, S)
+    assert zero(new.C_tilde.extract(c, n))
+    assert zero(new.C_tilde.extract(n, n) - coords.C_tilde_inv.extract(n, n).inv())  # M = (G_nn)^{-1}
+    assert zero(new.Lstar_tilde - coords.Lstar_tilde)
+    # The automatic basis's harmonic column takes a compact component and becomes extended.
+    assert new.types == ("c", "e", "e", "e")
+

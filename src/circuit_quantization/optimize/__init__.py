@@ -9,6 +9,7 @@ Nothing in the core package imports this subpackage.
     best = result.transform(S1s[0])
 """
 
-from .choose import choose_S1
+from .choose import Candidate, choose_S1, h_hash
+from .patterns import by_cost, most_zeros_first
 
-__all__ = ["choose_S1"]
+__all__ = ["Candidate", "by_cost", "choose_S1", "h_hash", "most_zeros_first"]

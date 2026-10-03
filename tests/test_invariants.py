@@ -4,7 +4,7 @@ import pytest
 import sympy as sym
 
 from circuit_quantization import (
-    Loops, decouple, default_tree, hamiltonian, irrotational_B, spanning_trees,
+    Loops, compact_charge_decoupling, decouple, default_tree, hamiltonian, irrotational_B, spanning_trees,
     lagrangian, mode_basis, residual_freedom, transform,
 )
 from circuit_quantization.units import Phi0, e, h_GHz
@@ -135,3 +135,23 @@ def test_seed_without_dynamical_modes_is_rejected():
     assert not set(types) & {"c", "e", "h"}
     with pytest.raises(ValueError, match="no dynamical modes"):
         decouple(lag, Z, types)
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_compact_charge_decoupling_is_a_canonical_relabelling(seed):
+    circuit = random_circuit(seed)
+    lag, _, coords, loops, _, ham = build(circuit)
+    c = [j for j, t in enumerate(coords.types) if t == "c"]
+    n = [j for j, t in enumerate(coords.types) if t != "c"]
+    S = compact_charge_decoupling(coords)
+    if not (c and n):  # nothing to shear
+        assert S == sym.eye(len(coords.types))
+        return
+    new = transform(lag, coords, S)
+    assert new.C_tilde.extract(c, n).applyfunc(sym.cancel).is_zero_matrix
+    assert (new.Lstar_tilde - coords.Lstar_tilde).applyfunc(sym.cancel).is_zero_matrix
+    ham_new = hamiltonian(lag, new, loops, irrotational_B(lag, new, loops), circuit.t)
+    old_in_new = ham.H.subs(dict(zip(ham.varphi, S * ham_new.varphi)) | dict(zip(ham.n, S.inv().T * ham_new.n)),
+                            simultaneous=True)
+    assert same_up_to_constant(ham_new.H, old_in_new, ham)
+

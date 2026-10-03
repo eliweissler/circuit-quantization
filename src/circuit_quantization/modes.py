@@ -225,15 +225,15 @@ def coordinates(lag, Z_full, types=None):
     )
 
 
-def _decouple_block(V, nondynamical, form):
-    """Make every column of V form-orthogonal to the nondynamical columns.
+def _decouple_block(V, n_to_decouple, form):
+    """Make every column of V form-orthogonal to the final n columns.
 
-    Eliminate one nondynamical column at a time, in reverse order, updating all
-    earlier columns, including the earlier nondynamical ones. A degenerate
+    Eliminate one n_to_decouple column at a time, in reverse order, updating all
+    earlier columns, including the earlier n_to_decouple ones. A degenerate
     sector therefore needs no inverse.
     """
     k = V.cols
-    Z = sym.Matrix.hstack(V, nondynamical)
+    Z = sym.Matrix.hstack(V, n_to_decouple)
     for i in range(Z.cols - 1, k - 1, -1):
         w = Z[:, i]
         pivot = sym.cancel((w.T * form * w)[0])
@@ -276,15 +276,19 @@ def decouple(lag, Z_full, types, *, check=True):
 
 # (old type, new type) pairs a column may be mixed along, eq:S1_structure.
 _S1a = {("c", "c"), ("c", "e"), ("e", "e"), ("h", "e"), ("h", "h")}
-_S1b = _S1a | {("e", "h")}
+# Without preserving harmonic columns, any noncompact column may take extended or
+# compact components; a harmonic column that takes a compact one becomes extended.
+# Compact columns still take only compact components, so the lattice is kept.
+_S1b = _S1a | {("e", "h"), ("c", "h")}
 
 
 def residual_freedom(coords, keep_harmonic=True):
     """Symbolic S_1 with free entries where eq:S1_structure allows them.
 
     keep_harmonic=True gives S_{1,a}; False gives S_{1,b}, which lets harmonic
-    columns acquire extended components. S_cc must also lie in GL(N_c, Z)
-    (eq:Scc_unimodular); transform() checks that once values are chosen.
+    columns acquire extended or compact components (making them extended).
+    S_cc must also lie in GL(N_c, Z) (eq:Scc_unimodular); transform() checks
+    that once values are chosen.
 
     :param coords: Retained Coordinates defining the current mode order.
     :param bool keep_harmonic: Preserve harmonic columns when True; allow
@@ -297,6 +301,31 @@ def residual_freedom(coords, keep_harmonic=True):
         len(types), len(types),
         lambda i, j: sym.Symbol(f"s_{i + 1}_{j + 1}") if (types[i], types[j]) in allowed else 0,
     )
+
+
+def compact_charge_decoupling(coords):
+    """S_1 that removes the charge coupling between compact and noncompact modes exactly.
+
+    Makes each noncompact column C~-orthogonal to the compact columns, the same
+    elimination decouple applies to free modes. In (c, n) blocks this is
+    S = [[I, -X], [0, I]] with C_cc X = C_cn, so S^T C~ S = diag(C_cc, M), with
+    M = C_nn - C_nc X = ((C~^{-1})_nn)^{-1}, and S^T L~* S = L~*, since compact
+    columns carry no inductance. Compact columns are unchanged, keeping their periods;
+    noncompact columns gain compact components, so junction participation can spread
+    and a harmonic column becomes extended. Rational in the circuit parameters.
+
+    :param coords: Retained Coordinates, in any column order.
+    :returns: S_1 in coords.types order; apply it with transform or Result.transform.
+    """
+    columns = sym.eye(len(coords.types))
+    compact = [j for j, t in enumerate(coords.types) if t == "c"]
+    other = [j for j, t in enumerate(coords.types) if t != "c"]
+    S = sym.Matrix(columns)
+    if compact and other:
+        sheared = _decouple_block(columns[:, other], columns[:, compact], coords.C_tilde)
+        for k, j in enumerate(other):
+            S[:, j] = sheared[:, k]
+    return _cancel(S)
 
 
 def transform(lag, coords, S1):

@@ -98,7 +98,7 @@ to zero to omit its symbol.
 - **Units.** `C` in F, `L` in H, source `V` in V, loop fluxes in Wb, time in s. `EJ` and the Hamiltonian are `E/h` in GHz. Use `phase_to_weber` to pass a dimensionless external phase.
 - **Ordering.** Nodes are ordered internal | ground | source, each group sorted naturally by label (`2 < 10`, `"q2" < "q10"`; ints and strings mix). Branches are ordered capacitor | junction | inductor | source. `res.circuit.branch_names` gives the branch order.
 - **Loops.** `Loops` requires a complete cycle basis whose coefficients are 0 or ±1, so every row is a physical loop. Every cycle carries a visible flux `Phi_<name>` unless you set it explicitly, including capacitively broken cycles, whose flux changes the physics of a time-dependent drive (notes Sec V.E).
-- **Coordinates.** `quantize` builds the mode-separated basis of the notes' Table II automatically. Pass your own square `Z_full` together with `types`; the basis need not be decoupled yet. To explore residual mixing, `res.residual_freedom()` shows the allowed entries of S_1 in `res.coords.types` order, and `res.transform(S)` returns a new result for the same circuit and loops in coordinates `Z S`. Final mode types follow junction and inductor participation, allowing extended and harmonic axes to mix in either direction. For intermediate matrices alone, use `cq.transform(res.lag, res.coords, S)`.
+- **Coordinates.** `quantize` builds the mode-separated basis of the notes' Table II automatically. Pass your own square `Z_full` together with `types`; the basis need not be decoupled yet. To explore residual mixing, `res.residual_freedom()` shows the allowed entries of S_1 in `res.coords.types` order, and `res.transform(S)` returns a new result for the same circuit and loops in coordinates `Z S`. Final mode types follow junction and inductor participation, allowing extended and harmonic axes to mix in either direction. For intermediate matrices alone, use `cq.transform(res.lag, res.coords, S)`. `cq.compact_charge_decoupling(res.coords)` gives the S_1 that removes all compact–noncompact charge coupling exactly, keeping the compact periods and the inductive matrix; noncompact columns gain compact components, so a harmonic column becomes extended.
 
 To factor coefficients and combine trigonometric terms in the final Hamiltonian,
 use `quantize(circuit, loops, Z_full, types, simplify=True)` (also works with the
@@ -185,6 +185,26 @@ best = res.transform(S1s[0])
 Each S_1 is in `res.coords.types` column order. The search treats every junction
 as distinct, as sircuitenum does, so equal junction energies never cancel a
 coupling in the ranking.
+
+`pattern_order` sets which couplings the solver tries to zero, and in what order.
+It receives one stage's off-diagonal entries as keys `(name, i, j)`, with name
+`"J"` in the junction stage and `"L"`/`"C"` in the linear one, and yields
+`(cost, term indices)` in non-decreasing cost. The solver keeps every solvable set
+at the first cost that has one, so expensive solves that cannot win never run.
+The default `most_zeros_first` is sircuitenum's order; `by_cost(cost)` builds an
+order from any `cost(keys)` by visiting all subsets, which suits small stages.
+
+`score` ranks the solved candidates, lowest first, in place of sircuitenum's
+`H_hash` (the default, `h_hash`). It receives a `Candidate` holding S_1 and the
+transformed `C_inv`, `L`, and `wJ_T` in (compact, extended, harmonic) order, and
+returns anything sortable. It is called on the symbolic candidates
+(`instance=False`) and then on their integer instances (`instance=True`).
+
+```python
+from circuit_quantization.optimize import by_cost
+
+S1s, best = choose_S1(res.lag, res.coords, pattern_order=by_cost(my_cost), score=my_score)
+```
 
 ## Circuit diagrams
 

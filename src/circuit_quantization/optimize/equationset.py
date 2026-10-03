@@ -28,10 +28,20 @@ SOLVE_CACHE = {}
 UNSOLVABLE_CACHE = set()  # sets of equations with no solutions
 
 
+def largest_subsets_first(n_terms: int):
+    """
+    circuit_quantization: the default search order of maximally_compatible_sol, as
+    (cost, keys) pairs: every subset of the n_terms term groups, largest first.
+    """
+    for nz in range(n_terms, 0, -1):
+        for keys in itertools.combinations(range(n_terms), nz):
+            yield -nz, keys
+
+
 def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr] = [],
                              nonzero_constraints: list[sym.Expr] = [],
                              rational_only = False, stop_at_first=False, debug=False,
-                             get_all_sols = True) -> Tuple[list, list]:
+                             get_all_sols = True, patterns=None) -> Tuple[list, list]:
     """
     Given a list of list of systems of equations, identifies the largest set of compatible
     systems of equations that can be solved simultaneously. Returns the indices of the selected
@@ -51,6 +61,11 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
         Expressions to be included as constraints to the solver to enforce nonzero conditions.
     rational_only : bool, optional
         If ``True``, only allows for solutions that contain rational numbers
+    patterns : iterable of (cost, tuple[int, ...]), optional
+        circuit_quantization: candidate sets of term indices in non-decreasing cost.
+        The search returns every solvable set at the first cost that has one (only
+        the first, with ``stop_at_first``). Defaults to largest_subsets_first, the
+        original top-down search by size.
         
     Returns
     -------
@@ -127,55 +142,60 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
     G.add_nodes_from(range(n_terms))
     G.add_edges_from(incompatible_pairs)
 
-    # Top down search for largest compatible set
+    # Search candidate sets in non-decreasing cost; the default is top down by size
     all_sols = []
     sol_keys = []
-    for nz in range(n_terms, 0, -1):
-        sol_found = False
-        for keys in itertools.combinations(range(n_terms), nz):
+    if patterns is None:
+        patterns = largest_subsets_first(n_terms)
+    level, sol_found = None, False
+    for cost, keys in patterns:
+        if cost != level:
+            if sol_found:
+                return sol_keys, all_sols
+            level = cost
+        elif sol_found and stop_at_first:
+            continue
+        if debug:
+            print("Checking compatibility of combined eqs:", keys)
+        # Check if all individual terms are solvable
+        if not all(is_solvable[k] for k in keys):
             if debug:
-                print("Checking compatibility of combined eqs:", keys)
-            # Check if all individual terms are solvable
-            if not all(is_solvable[k] for k in keys):
-                if debug:
-                    print("Skipping incompatible individual term", [k for k in keys if not is_solvable[k]])
-                continue
+                print("Skipping incompatible individual term", [k for k in keys if not is_solvable[k]])
+            continue
 
-            # Check if a subset of the keys are incompatible
-            # by checking the conflict graph
-            if G.subgraph(keys).number_of_edges() > 0:
-                if debug:
-                    print("Skipping incompatible subset of terms")
-                continue
-            
-            # Check compatibility of combined terms
-            combined_eqs = list(itertools.chain.from_iterable(terms[k] for k in keys))
-            if is_compatible(combined_eqs + nz_term, check_fraction=False, debug=debug):
-                # Solve combined equations
-                sols = []
-                branches = solve_with_singular(combined_eqs + nz_term, check_fraction=False,
-                                               rational_only=True, debug=debug, get_all_sols=get_all_sols)
-                if debug:
-                    print("found", len(branches), "branches")
-                if branches:
-                    for sol in extract_mappings(branches, real_only=True):
-                        # Sub out nzvar if present
-                        if nz_var in sol:
-                            nz_var_val = sol.pop(nz_var)
-                            sol = {k: v.subs(nz_var, nz_var_val) for k, v in sol.items()}
-                        # Check nonzero conditions
-                        if any(sym.simplify(d.subs(sol)) == 0 for d in nonzero):
-                            continue
-                        sols.append(sol)
-                    if len(sols) > 0:
-                        all_sols.append(sols)
-                        sol_keys.append(keys)
-                        sol_found = True
-                        if stop_at_first:
-                            break
-        if sol_found:
-            return sol_keys, all_sols
-    
+        # Check if a subset of the keys are incompatible
+        # by checking the conflict graph
+        if G.subgraph(keys).number_of_edges() > 0:
+            if debug:
+                print("Skipping incompatible subset of terms")
+            continue
+        
+        # Check compatibility of combined terms
+        combined_eqs = list(itertools.chain.from_iterable(terms[k] for k in keys))
+        if is_compatible(combined_eqs + nz_term, check_fraction=False, debug=debug):
+            # Solve combined equations
+            sols = []
+            branches = solve_with_singular(combined_eqs + nz_term, check_fraction=False,
+                                           rational_only=True, debug=debug, get_all_sols=get_all_sols)
+            if debug:
+                print("found", len(branches), "branches")
+            if branches:
+                for sol in extract_mappings(branches, real_only=True):
+                    # Sub out nzvar if present
+                    if nz_var in sol:
+                        nz_var_val = sol.pop(nz_var)
+                        sol = {k: v.subs(nz_var, nz_var_val) for k, v in sol.items()}
+                    # Check nonzero conditions
+                    if any(sym.simplify(d.subs(sol)) == 0 for d in nonzero):
+                        continue
+                    sols.append(sol)
+                if len(sols) > 0:
+                    all_sols.append(sols)
+                    sol_keys.append(keys)
+                    sol_found = True
+    if sol_found:
+        return sol_keys, all_sols
+
     # Should not reach here
     return [], []
     
