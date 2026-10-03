@@ -83,7 +83,7 @@ def _result(circuit, loops, lag, coords, simplify, *, B=None):
     if B is None:
         B = irrotational_B(lag, coords, loops)
     else:
-        if loops.G * sym.ImmutableMatrix(B) != sym.eye(loops.G.rows):
-            raise ValueError("B must satisfy G * B = I")
+        if not (loops.G * sym.ImmutableMatrix(B) - sym.eye(loops.G.rows)).applyfunc(sym.cancel).is_zero_matrix:
+            raise ValueError("B must satisfy G * B = I")  # exact only after cancel, e.g. irrotational B
     ham = hamiltonian(lag, coords, loops, B, circuit.t, simplify=simplify)
     return Result(circuit=circuit, loops=loops, lag=lag, coords=coords, B=B, ham=ham)

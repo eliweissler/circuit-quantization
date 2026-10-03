@@ -3,10 +3,14 @@ channels:
   - conda-forge
 dependencies:
   - python=3.12
+  # Optional S_1 optimizer (circuit_quantization.optimize): exact solving with the
+  # Singular binary and integer instances with z3, as in sircuitenum.
+  - singular=4.4.1
+  - z3-solver=4.15.4.0
   - pip
   - pip:
       - sympy==1.14.0
       - scqubits==4.3.1
       - ipykernel
       - nbconvert
-      - -e .[test,draw]
+      - -e .[test,draw,optimize]

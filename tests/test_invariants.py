@@ -4,21 +4,20 @@ import pytest
 import sympy as sym
 
 from circuit_quantization import (
-    Loops, decouple, default_tree, hamiltonian, irrotational_B,
+    Loops, decouple, default_tree, hamiltonian, irrotational_B, spanning_trees,
     lagrangian, mode_basis, residual_freedom, transform,
 )
 from circuit_quantization.units import Phi0, e, h_GHz
 from circuits import harmonium, kite, random_circuit
 
-SEEDS = range(30)
+# Seed 7 has no dynamical modes; test_seed_without_dynamical_modes_is_rejected covers it.
+SEEDS = [seed for seed in range(30) if seed != 7]
 
 
 def build(circuit, loops=None):
     """The quantize pipeline, step by step, on the automatic basis."""
     lag = lagrangian(circuit)
     Z, types = mode_basis(lag)
-    if not set(types) & {"c", "e", "h"}:
-        pytest.skip("no dynamical modes")
     coords = decouple(lag, Z, types)
     loops = loops or Loops.from_tree(circuit, default_tree(circuit))
     B = irrotational_B(lag, coords, loops)
@@ -46,35 +45,51 @@ def test_assignment_satisfies_loop_and_irrotational_constraints(seed):
 
 @pytest.mark.parametrize("build_circuit", [harmonium, kite] + [lambda s=s: random_circuit(s) for s in SEEDS])
 def test_hamiltonian_matches_an_independent_node_space_legendre_transform(build_circuit):
-    # Rebuild H from the branch list alone: T = sum C_k (dPhi_k)^2 / 2 and U over inductors and
-    # junctions, with the same B.  Then substitute Phi = Z varphi phi_0 and Q = Z^{-T} 2e n.
+    # Rebuild H from the branch list alone, in the full decoupled basis Phi = Z_full y:
+    # T = sum C_k (dPhi_k)^2 / 2 and U over inductors and junctions, with the same B.
+    # Free directions keep a symbolic conserved charge, which must decouple from the retained
+    # modes; frozen directions sit at the minimum of U; cyclic directions appear nowhere.
+    # Then substitute y = varphi phi_0 and Q = 2e n on the retained modes.
     circuit = build_circuit()
     lag, types, coords, loops, B, ham = build(circuit)
-    if set(types) - {"c", "e", "h"}:
-        pytest.skip("reference covers circuits without non-dynamical modes")
+    kinds = coords.types_full
     nodes = circuit.internal_nodes
-    Phi = sym.Matrix(sym.symbols(f"Phi_1:{len(nodes) + 1}", real=True))
-    velocity = sym.Matrix(sym.symbols(f"v_1:{len(nodes) + 1}", real=True))
     node = dict(zip(nodes, range(len(nodes))))
+    y = sym.Matrix(sym.symbols(f"y_1:{len(nodes) + 1}", real=True))
+    velocity = sym.Matrix(sym.symbols(f"v_1:{len(nodes) + 1}", real=True))
+    Phi, dPhi = coords.Z_full * y, coords.Z_full * velocity
 
     def across(x, b):
         return (x[node[b.tail]] if b.tail in node else 0) - (x[node[b.head]] if b.head in node else 0)
 
+    # Kinetic: Legendre transform over the directions with capacitance, retained and free.
+    moving = [j for j, t in enumerate(kinds) if t in ("c", "e", "h", "fr")]
+    kinetic = sum(b.C * across(dPhi, b) ** 2 for b in circuit.branches) / 2
+    assert not kinetic.free_symbols & {velocity[j] for j in range(len(nodes)) if j not in moving}
+    M = sym.hessian(kinetic, [velocity[j] for j in moving])
+    charge = sym.Matrix([sym.Symbol(f"{'p' if kinds[j] == 'fr' else 'Q'}_{j + 1}", real=True) for j in moving])
+    H = (charge.T * M.inv() * charge)[0] / 2
+
+    # Potential, with each frozen direction at the minimum of U (it sees only inductors).
     offset = B * loops.Phi_ext
-    kinetic = sum(b.C * across(velocity, b) ** 2 for b in circuit.branches) / 2
-    C_int = sym.hessian(kinetic, list(velocity))
-    Q = sym.Matrix(sym.symbols(f"Q_1:{len(nodes) + 1}", real=True))
-    H = (Q.T * C_int.inv() * Q)[0] / 2
+    U = 0
     for k, b in enumerate(circuit.branches):
         flux = across(Phi, b) + offset[k]
         if b.type == "L":
-            H += flux**2 / (2 * b.L)
+            U += flux**2 / (2 * b.L)
         elif b.type == "J":
-            H -= b.EJ * h_GHz * sym.cos(2 * sym.pi * flux / Phi0)
-    Z = coords.Z
-    substitution = dict(zip(Phi, Z * ham.varphi * Phi0 / (2 * sym.pi)))
-    substitution.update(zip(Q, Z.inv().T * ham.n * 2 * e))
+            U -= b.EJ * h_GHz * sym.cos(2 * sym.pi * flux / Phi0)
+    frozen = [y[j] for j, t in enumerate(kinds) if t == "fz"]
+    if frozen:
+        U = U.subs(sym.solve([sym.diff(U, x) for x in frozen], frozen, dict=True)[0])
+    retained = [j for j, t in enumerate(kinds) if t in ("c", "e", "h")]
+    assert U.free_symbols & set(y) <= {y[j] for j in retained}  # free and cyclic directions drop out
+    H += U
+
+    substitution = {y[j]: phase * Phi0 / (2 * sym.pi) for j, phase in zip(retained, ham.varphi)}
+    substitution.update({sym.Symbol(f"Q_{j + 1}", real=True): 2 * e * n for j, n in zip(retained, ham.n)})
     reference = H.subs(substitution, simultaneous=True) / h_GHz
+    # The free charges p_j may contribute their own energy, but nothing that couples to varphi or n.
     assert same_up_to_constant(ham.H, reference, ham)
 
 
@@ -82,21 +97,12 @@ def test_hamiltonian_matches_an_independent_node_space_legendre_transform(build_
 def test_hamiltonian_is_invariant_under_a_change_of_cycle_basis(seed):
     circuit = random_circuit(seed)
     _, _, _, loops, _, ham = build(circuit)
-    G = sym.Matrix(loops.G)
-    # One unimodular row operation G_j -> G_j + G_i that keeps every row a physical loop.
-    for i in range(G.rows):
-        for j in range(G.rows):
-            row = G[j, :] + G[i, :]
-            if i != j and any(row) and set(row) <= {-1, 0, 1}:
-                T = sym.eye(G.rows)
-                T[j, i] = 1
-                break
-        else:
-            continue
-        break
-    else:
-        pytest.skip("no single row operation keeps the loops physical")
-    rebased = loops.rebase(T * G)  # Phi_ext' = T Phi_ext (eq:G_basis_change)
+    # Any other spanning tree gives a unimodular change of basis G' = T G (eq:G_basis_change).
+    other = next((candidate for tree in spanning_trees(circuit)
+                  if (candidate := Loops.from_tree(circuit, tree)).G != loops.G), None)
+    if other is None:
+        pytest.skip("every spanning tree gives the same loops")
+    rebased = loops.rebase(other.G, names=other.names)  # Phi_ext' = T Phi_ext
     *_, ham_rebased = build(circuit, rebased)
     assert canonical(ham_rebased.H, ham) == canonical(ham.H, ham)
 
@@ -120,3 +126,12 @@ def test_hamiltonian_is_invariant_under_residual_freedom(build_circuit):
     old_in_new = ham.H.subs(dict(zip(ham.varphi, S * ham_new.varphi)) | dict(zip(ham.n, S.inv().T * ham_new.n)),
                             simultaneous=True)
     assert same_up_to_constant(ham_new.H, old_in_new, ham)
+
+
+def test_seed_without_dynamical_modes_is_rejected():
+    # The one random circuit build() skips: every mode is free or frozen, so there is nothing to quantize.
+    lag = lagrangian(random_circuit(7))
+    Z, types = mode_basis(lag)
+    assert not set(types) & {"c", "e", "h"}
+    with pytest.raises(ValueError, match="no dynamical modes"):
+        decouple(lag, Z, types)

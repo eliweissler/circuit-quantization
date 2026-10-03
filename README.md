@@ -167,6 +167,25 @@ triangle has three spanning trees and just one independent loop. Retaining the
 closure-branch names identifies which tree generated the basis. Arbitrary cycle
 bases need not be fundamental bases of any tree.
 
+## Choosing S_1 (optional)
+
+`circuit_quantization.optimize` ports sircuitenum's `choose_Z` to the residual
+freedom: it searches S_1 for the coordinates whose junction, inductive, and
+capacitive couplings are sparsest, ranked by sircuitenum's `H_hash`. It needs the
+Singular binary, `z3-solver`, and `func-timeout`; `environment.yml` installs all
+three, and nothing else in the package imports this subpackage.
+
+```python
+from circuit_quantization.optimize import choose_S1
+
+S1s, h_class = choose_S1(res.lag, res.coords)  # every S_1 tied for the best class
+best = res.transform(S1s[0])
+```
+
+Each S_1 is in `res.coords.types` column order. The search treats every junction
+as distinct, as sircuitenum does, so equal junction energies never cancel a
+coupling in the ranking.
+
 ## Circuit diagrams
 
 Install the optional drawing dependencies with `pip install -e ".[draw]"`.
@@ -240,9 +259,9 @@ constructor; further configuration is available on the returned object.
 ## Development
 
 ```bash
-conda run -n cqed python -m pip install -e ".[test]"
-conda run -n cqed python -m pytest -q
-conda run -n cqed python tools/eqrefs.py path/to/full_matrix_quantization.tex
+conda env create -f environment.yml   # pinned sympy and scqubits, plus the optimizer's Singular and z3
+conda run -n circuit_quantization python -m pytest -q
+conda run -n circuit_quantization python tools/eqrefs.py path/to/full_matrix_quantization.tex
 ```
 
 The tests reproduce the worked examples of the notes' Appendix B and the examples in the body.
@@ -252,7 +271,14 @@ The tests reproduce the worked examples of the notes' Appendix B and the example
 `sircuitenum/tests/test_quantize.py`, without requiring sircuitenum at runtime.
 It covers mode counts, formerly singular bases, serial decoupling, and agreement
 between automatic and explicit quantization. Topologies run with both distinct
-and equal element values. An isolated reference ground preserves the original
-floating circuits, and the original `sigma` mode maps to `cy`. Tests of
-sircuitenum-specific Hamiltonian hashes and transformation enumeration are not
-ported; their corresponding APIs are absent here.
+and equal element values. The original floating circuits have no ground
+(`ground=None`), and the original `sigma` mode maps to `cy`.
+
+`tests/optimize/` ports sircuitenum's solver tests (`test_rational_check`,
+`test_equationset`, `test_singular_interface`, `test_z3_interface`) and the
+`test_quantize` cases for the vendored functions. `test_choose_Z` becomes
+`test_choose_S1_reproduces_choose_Z`, which runs sircuitenum's circuits through
+this package and checks its `H_hash` classes. Inputs that came from sircuitenum's
+own circuit builders are stored in `tests/optimize/sircuitenum_fixtures.json`
+(regenerate with `make_sircuitenum_fixtures.py` where sircuitenum is installed).
+The directory is skipped when the optional dependencies are missing.

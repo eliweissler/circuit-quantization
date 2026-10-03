@@ -3,7 +3,7 @@ import sympy as sym
 
 import circuit_quantization as cq
 from circuit_quantization import Branch, Circuit, Loops, quantize
-from circuits import HARMONIUM_CYCLES, HARMONIUM_Z, KITE_CYCLES, KITE_Z, kite, pos
+from circuits import HARMONIUM_CYCLES, HARMONIUM_Z, KITE_CYCLES, KITE_Z, ZERO_PI_CYCLES, kite, pos, zero_pi
 
 
 def harmonium_in_ghz():
@@ -240,3 +240,12 @@ def test_result_transform_preserves_an_existing_driven_assignment(scale):
     substitution.update(zip(original.ham.n, S.inv().T * transformed.ham.n))
     expected = original.H.subs(substitution, simultaneous=True)
     assert sym.simplify(transformed.H - expected) == 0
+
+
+def test_result_transform_accepts_an_irrotational_B_equal_to_its_loop_constraint_only_after_cancel():
+    # Zero-pi's irrotational B carries capacitance ratios: G B = I holds only after cancellation.
+    circuit = zero_pi()
+    result = quantize(circuit, Loops.from_branch_dict(circuit, ZERO_PI_CYCLES, {"t1": 0, "t2": 0}))
+    assert result.loops.G * result.B != sym.eye(3)
+    assert result.transform(sym.eye(3)).H == result.H
+
