@@ -42,6 +42,46 @@ def zero_pi():
     ])
 
 
+def zero_pi_asymmetric():
+    """zero_pi with every element distinct, so the compact shear and the e-h normal modes are both nontrivial."""
+    CJ1, CJ2, C1, C2, L1, L2, EJ1, EJ2 = pos("C_J1 C_J2 C_1 C_2 L_1 L_2 E_J1 E_J2")
+    return Circuit([
+        Branch("J1", 1, 2, C=CJ1, EJ=EJ1),
+        Branch("J2", 3, 4, C=CJ2, EJ=EJ2),
+        Branch("L1", 2, 3, L=L1),
+        Branch("L2", 4, 1, L=L2),
+        Branch("C1", 1, 3, C=C1),
+        Branch("C2", 2, 4, C=C2),
+    ])
+
+
+def fluxonium_pair():
+    """Two grounded fluxoniums coupled by C_c: two extended modes, no compact mode, so no shear."""
+    C1, C2, Cc, CJ1, CJ2, L1, L2, EJ1, EJ2 = pos("C_1 C_2 C_c C_J1 C_J2 L_1 L_2 E_J1 E_J2")
+    return Circuit([
+        Branch("C1", 1, 0, C=C1),
+        Branch("J1", 1, 0, C=CJ1, EJ=EJ1),
+        Branch("L1", 1, 0, L=L1),
+        Branch("C2", 2, 0, C=C2),
+        Branch("J2", 2, 0, C=CJ2, EJ=EJ2),
+        Branch("L2", 2, 0, L=L2),
+        Branch("Cc", 1, 2, C=Cc),
+    ], ground=0)
+
+
+def transmon_fluxonium():
+    """A grounded transmon coupled by C_c to a grounded fluxonium: one compact, one extended mode, so only the shear."""
+    Ct, Cf, Cc, CJ1, CJ2, Lf, EJ1, EJ2 = pos("C_t C_f C_c C_J1 C_J2 L_f E_J1 E_J2")
+    return Circuit([
+        Branch("Ct", 1, 0, C=Ct),
+        Branch("J1", 1, 0, C=CJ1, EJ=EJ1),
+        Branch("Cf", 2, 0, C=Cf),
+        Branch("J2", 2, 0, C=CJ2, EJ=EJ2),
+        Branch("Lf", 2, 0, L=Lf),
+        Branch("Cc", 1, 2, C=Cc),
+    ], ground=0)
+
+
 ZERO_PI_CYCLES = {  # eq:zp_G
     "ring": {"J1": 1, "J2": 1, "L1": 1, "L2": 1},
     "t1": {"J1": 1, "L1": 1, "C1": -1},

@@ -1188,6 +1188,13 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
                                    when choosing transformations.
         names (list[str]): circuit_quantization: a label for each matrix in mats,
                            used in the term keys (name, i, j). Defaults to "0", "1", ...
+        row_mats (list[sym.Matrix]): circuit_quantization: rectangular matrices M with one
+                           column per mode, such as the junction incidence omega_J^T,
+                           transformed as M Z rather than by congruence. Their entries
+                           (k, j) in noncompact columns j are decoupling terms, after
+                           those of mats; compact columns are fixed by the alignment.
+        row_names (list[str]): circuit_quantization: labels for row_mats in the term keys.
+                           Defaults to "R0", "R1", ...
         pattern_order (callable): circuit_quantization: takes the term keys, one
                                   (name, i, j) per off-diagonal entry in mats order,
                                   and returns (cost, term indices) candidates for
@@ -1211,6 +1218,8 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
 
     debug = kwargs.get("debug", False)
     names = kwargs.get("names", [str(k) for k in range(len(mats))])
+    row_mats = kwargs.get("row_mats", [])
+    row_names = kwargs.get("row_names", [f"R{k}" for k in range(len(row_mats))])
     pattern_order = kwargs.get("pattern_order", None)
 
     # Record mode types
@@ -1248,13 +1257,19 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     
     # Symmetric coupling -> only consider upper triangle
     pairs = [(i, j) for (i, j) in itertools.product(range(n_d), repeat=2) if i < j]
+    targets = [(name, trMat, pairs) for name, trMat in zip(names, to_decouple)]
+    # circuit_quantization: rectangular matrices, entry by entry in noncompact columns
+    noncompact = [j for j in range(n_d) if j not in comp]
+    for name, mat in zip(row_names, row_mats):
+        trMat = mat[:, :n_d]*Z[:n_d, :n_d]
+        targets.append((name, trMat, [(k, j) for k in range(trMat.rows) for j in noncompact]))
     coupling = []
     term_keys = []  # (name, i, j) for each entry of coupling
     zero_keys = []
     count = 0
 
-    for name, trMat in zip(names, to_decouple):
-        for (i, j) in pairs:
+    for name, trMat, entries in targets:
+        for (i, j) in entries:
             term_keys.append((name, i, j))
             vars_in_eq = [v for v in var_list if v in trMat[i, j].free_symbols]
             # If it takes more than 1 second to determine equations for decoupling, then

@@ -1,7 +1,7 @@
 """End-to-end pipeline: Sec I -> II -> III -> V -> IV."""
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 
 import sympy as sym
 
@@ -87,3 +87,27 @@ def _result(circuit, loops, lag, coords, simplify, *, B=None):
             raise ValueError("B must satisfy G * B = I")  # exact only after cancel, e.g. irrotational B
     ham = hamiltonian(lag, coords, loops, B, circuit.t, simplify=simplify)
     return Result(circuit=circuit, loops=loops, lag=lag, coords=coords, B=B, ham=ham)
+
+
+def numerify(obj, values):
+    """Substitute element values into every matrix and expression of obj.
+
+    Works on a Lagrangian, Coordinates, Hamiltonian, or Result; in a Result, lag,
+    coords, B, and ham are substituted, while circuit and loops stay as built.
+    Physical constants stay symbolic; follow with subs_constants for those.
+    Exact values (integers, Rationals) keep the exact zero tests of mode_basis,
+    decouple, and transform valid; floats suit only end products such as B or H.
+
+    :param obj: Lagrangian, Coordinates, Hamiltonian, Result, or a SymPy object.
+    :param values: {symbol: number} for the element values to substitute.
+    :returns: An object of the same type with the values substituted.
+    """
+    if isinstance(obj, (Circuit, Loops)):
+        return obj
+    if is_dataclass(obj):
+        return replace(obj, **{f.name: numerify(getattr(obj, f.name), values) for f in fields(obj) if f.init})
+    if isinstance(obj, tuple):
+        return tuple(numerify(x, values) for x in obj)
+    if isinstance(obj, (sym.Basic, sym.MatrixBase)):
+        return obj.subs(values)
+    return obj

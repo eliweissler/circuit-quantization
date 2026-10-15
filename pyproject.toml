@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "GPL-3.0-only"
 authors = [{name = "Eli Weissler"}]
-dependencies = ["networkx>=3.4", "sympy>=1.13"]
+dependencies = ["networkx>=3.4", "sympy>=1.13", "numpy>=1.14.2", "scipy>=1.5"]  # numpy, scipy floors from scqubits
 
 [project.optional-dependencies]
 scqubits = ["scqubits>=4.2"]

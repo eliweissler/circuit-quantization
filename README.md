@@ -176,34 +176,57 @@ Singular binary, `z3-solver`, and `func-timeout`; `environment.yml` installs all
 three, and nothing else in the package imports this subpackage.
 
 ```python
-from circuit_quantization.optimize import choose_S1
+from circuit_quantization.optimize import choose_instance, choose_S1
 
-S1s, h_class = choose_S1(res.lag, res.coords)  # every S_1 tied for the best class
-best = res.transform(S1s[0])
+S1s, h_class = choose_S1(res.lag, res.coords)  # S_1 families tied for the best class
+S1, weight = choose_instance(res.lag, res.coords, S1s[0])  # integer instance, minimum junction weight
+best = res.transform(S1)
 ```
 
-Each S_1 is in `res.coords.types` column order. The search treats every junction
-as distinct, as sircuitenum does, so equal junction energies never cancel a
-coupling in the ranking.
+`choose_S1` runs seeds, then stages, then a score. Every S_1 is in
+`res.coords.types` column order, and every junction counts as distinct, as in
+sircuitenum, so equal junction energies never cancel a coupling in the ranking.
 
-`pattern_order` sets which couplings the solver tries to zero, and in what order.
-It receives one stage's off-diagonal entries as keys `(name, i, j)`, with name
-`"J"` in the junction stage and `"L"`/`"C"` in the linear one, and yields
-`(cost, term indices)` in non-decreasing cost. The solver keeps every solvable set
-at the first cost that has one, so expensive solves that cannot win never run.
-The default `most_zeros_first` is sircuitenum's order; `by_cost(cost)` builds an
-order from any `cost(keys)` by visiting all subsets, which suits small stages.
+- `seeds(lag, coords)` returns starting S_1, each checked as a valid residual
+  transformation; stages and score then use that seed's own mode types. The
+  default `compact_alignments` is sircuitenum's enumeration of compact
+  alignments. With `stages=()` the seeds themselves are ranked, so a seed
+  function can be a complete generator of candidates.
+- `blocks` are the (old type, new type) blocks of S_1 that the first stage opens
+  as free entries after the seed, from `ALLOWED_BLOCKS`; later stages solve among
+  what the previous one left free. The default is sircuitenum's
+  `SIRCUITENUM_BLOCKS`.
+- `stages` set which couplings the solver tries to zero, in sequence. A `Stage`
+  names square matrices, whose upper off-diagonal entries become terms, and
+  rectangular ones (`rows`), whose entries in noncompact columns do. Built-in
+  names are `"J"` (junction matrix), `"L"` (L~*), `"Cinv"` (C~^{-1}), and `"wJ"`
+  (rows of omega_J~^T); a custom entry is `(name, matrix)` or
+  `(name, matrix, law)`, with the matrix in `res.coords.types` column order and
+  law `"flux"` (transforms like L~*) or `"charge"` (like C~^{-1}). Each stage's
+  `order` receives its terms as keys `(name, i, j)` and yields
+  `(cost, term indices)` in non-decreasing cost; the solver keeps every solvable
+  set at the first cost that has one. The defaults are `SIRCUITENUM` and
+  `most_zeros_first`; `by_cost(cost)` builds an order from any `cost(keys)` by
+  visiting all subsets, which suits small stages.
+- `score` ranks the candidates, lowest first. It receives a `Candidate` holding
+  S_1 and the transformed `C_inv`, `L`, and `wJ_T` in (compact, extended,
+  harmonic) order; `candidate.zeros` lists the keys of every stage's terms that
+  vanish. The default `h_hash` is sircuitenum's ranking; its tiebreaker
+  prefilter and caches apply only to it, so a custom score ranks every candidate.
 
-`score` ranks the solved candidates, lowest first, in place of sircuitenum's
-`H_hash` (the default, `h_hash`). It receives a `Candidate` holding S_1 and the
-transformed `C_inv`, `L`, and `wJ_T` in (compact, extended, harmonic) order, and
-returns anything sortable. It is called on the symbolic candidates
-(`instance=False`) and then on their integer instances (`instance=True`).
+The returned S_1 keep their free entries. `choose_instance` finds one family's
+integer instance of minimum junction weight with z3, as sircuitenum does; it is
+meant for families whose junction coefficients come out integer, and
+`max_weight` skips families that cannot beat the best weight so far. `instance`
+sets free entries deterministically to small values that keep S_1 invertible,
+without optimizing. `candidate(lag, coords, S1)` builds the `Candidate` for any
+S_1, for example to score instances.
 
 ```python
-from circuit_quantization.optimize import by_cost
+from circuit_quantization.optimize import Stage, by_cost
 
-S1s, best = choose_S1(res.lag, res.coords, pattern_order=by_cost(my_cost), score=my_score)
+stages = (Stage(rows=("wJ",), order=by_cost(my_cost)), Stage(square=("L", "Cinv")))
+S1s, best = choose_S1(res.lag, res.coords, stages=stages, score=my_score)
 ```
 
 ## Circuit diagrams

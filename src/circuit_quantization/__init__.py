@@ -36,16 +36,21 @@ from .lagrangian import lagrangian
 from .loops import Loops, branch_dict_to_G, check_loops, cycle_bases, default_tree, spanning_trees, tree_to_G
 from .modes import (
     check_coordinates,
+    cluster_cost,
     compact_charge_decoupling,
     coordinates,
     decouple,
+    hierarchical_decoupling,
+    junction_clusters,
+    junction_inversions,
     mode_basis,
     mode_dimensions,
     mode_types,
+    normal_mode_decoupling,
     residual_freedom,
     transform,
 )
-from .quantize import Result, quantize
+from .quantize import Result, numerify, quantize
 from .qpackage_interface import scqubits_yaml, to_scqubits
 from .units import (
     farad_to_ghz,

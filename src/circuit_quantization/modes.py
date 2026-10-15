@@ -10,7 +10,10 @@ from functools import reduce
 from itertools import combinations
 from math import gcd
 
+import networkx as nx
 import sympy as sym
+import numpy as np
+from scipy.linalg import eigh
 
 DYNAMICAL = ("c", "e", "h")
 NONDYNAMICAL = ("fr", "fz", "cy")
@@ -34,6 +37,19 @@ class Coordinates:
 def _cancel(M):
     """Cancel each entry; the result is immutable."""
     return sym.ImmutableMatrix(M).applyfunc(sym.cancel)
+
+
+def _quick_inv(M):
+    """Inverse by cofactors for 2x2 to 4x4, where it beats elimination; M.inv() otherwise.
+
+    3x3 and 4x4 use sym.inv_quick, whose determinants expand over permutations, so
+    larger matrices fall back. 2x2 is written out: in sympy 1.14 inv_quick returns
+    zeros for a 2x2 with any numeric entry, such as a 0 off the diagonal.
+    """
+    if M.rows == 2:
+        (a, b), (c, d) = M.tolist()
+        return sym.Matrix([[d, -b], [-c, a]]) / (a * d - b * c)
+    return sym.inv_quick(M) if 3 <= M.rows <= 4 else M.inv()
 
 
 # --- subspaces, each a matrix of basis columns ------------------------------
@@ -194,7 +210,7 @@ def mode_types(lag, Z):
     )
 
 
-def coordinates(lag, Z_full, types=None):
+def coordinates(lag, Z_full, types=None, *, C_tilde=None, Lstar_tilde=None, R=None):
     """Build retained objects from a full decoupled basis (eq:Z_truncated).
 
     No validation; decouple runs check_coordinates first.
@@ -203,6 +219,9 @@ def coordinates(lag, Z_full, types=None):
     :param Z_full: Square decoupled node-to-coordinate matrix, including all
         non-dynamical columns. Use decouple first if the sectors are coupled.
     :param types: Optional labels for all columns; otherwise infer with mode_types.
+    :param C_tilde: Optional Z^T C_int Z, when already known (e.g. diagonal by construction).
+    :param Lstar_tilde: Optional Z^T L*_int Z, likewise.
+    :param R: Optional retained rows of Z_full^{-1}, likewise.
     :returns: Coordinates retaining Z_full and types_full, with dynamical columns
         Z and corresponding rows R of the full inverse. Column order is preserved.
     :raises ValueError: No dynamical modes.
@@ -213,14 +232,15 @@ def coordinates(lag, Z_full, types=None):
     if not retained:
         raise ValueError("Circuit has no dynamical modes")
     Z = Z_full[:, retained]
-    C_tilde = _cancel(Z.T * lag.C_int * Z)
+    C_tilde = _cancel(Z.T * lag.C_int * Z if C_tilde is None else C_tilde)
+    Lstar_tilde = _cancel(Z.T * lag.Lstar_int * Z if Lstar_tilde is None else Lstar_tilde)
     return Coordinates(
         Z_full=Z_full, types_full=types,
         Z=Z, types=tuple(types[i] for i in retained),
-        R=_cancel(Z_full.inv()[retained, :]),  # eq:Z_truncated
+        R=_cancel(_quick_inv(Z_full)[retained, :] if R is None else R),  # eq:Z_truncated
         C_tilde=C_tilde,
-        C_tilde_inv=_cancel(C_tilde.inv()),
-        Lstar_tilde=_cancel(Z.T * lag.Lstar_int * Z),
+        C_tilde_inv=_cancel(_quick_inv(C_tilde)),
+        Lstar_tilde=Lstar_tilde,
         omega_J_tilde=Z.T * lag.omega_J_int, omega_L_tilde=Z.T * lag.omega_L_int,
     )
 
@@ -303,6 +323,149 @@ def residual_freedom(coords, keep_harmonic=True):
     )
 
 
+def junction_inversions(coords, types=("c", "e"), *, clean=True):
+    """S_1 that make chosen junctions single-mode coordinates, one per choice of junctions.
+
+    Compact ("c"): every set K of N_c junctions whose compact rows of omega~_J^T are
+    independent gives S_cc = (omega~_{J,K}^T)^{-1} (eq:Scc_selection), kept when S_cc and
+    omega~_{J,c}^T S_cc are integer (eq:Scc_unimodular). With clean, S_ce = -S_cc B, B the
+    extended columns of those rows, also removes their extended components, so each
+    junction in K acts on one compact mode.
+    Extended ("e"): after the compact step, let r be the rank of the junctions' extended
+    rows. Every set E of r junctions with independent extended rows A gives
+    S_ee = (A^T (A A^T)^{-1}, N), N a basis of the extended directions no junction acts on,
+    so each junction in E acts on one extended mode (keeping its compact components,
+    which no allowed S_1 removes) and the N_e - r columns of N become harmonic.
+    When r = N_e this is S_ee = A^{-1}.
+    Requesting both yields every compact choice combined with every extended choice.
+
+    :param coords: Retained Coordinates, in any column order.
+    :param types: The blocks to invert: ("c",), ("e",), or ("c", "e").
+    :param bool clean: Remove the extended components of the compact-aligned junctions.
+    :returns: Generator of distinct S_1 in coords.types order, valid for transform.
+    """
+    if not types or set(types) - {"c", "e"}:
+        raise ValueError(f"types must be a nonempty subset of ('c', 'e'), not {types!r}")
+    n = len(coords.types)
+    c = [j for j, t in enumerate(coords.types) if t == "c"]
+    e = [j for j, t in enumerate(coords.types) if t == "e"]
+    W = _cancel(coords.omega_J_tilde.T)  # one row per junction
+    rows = range(W.rows)
+
+    def compact_steps():
+        if "c" not in types or not c:
+            yield sym.eye(n)
+            return
+        W_c = W.extract(list(rows), c)
+        for K in combinations(rows, len(c)):
+            A = W_c.extract(list(K), list(range(len(c))))
+            if A.det() == 0:
+                continue
+            S_cc = _quick_inv(A)
+            if not all(_is_integer(x) for x in list(S_cc) + list(W_c * S_cc)):
+                continue
+            S = sym.eye(n)
+            for a, i in enumerate(c):
+                for b, j in enumerate(c):
+                    S[i, j] = S_cc[a, b]
+            if clean and e:
+                S_ce = -S_cc * W.extract(list(K), e)
+                for a, i in enumerate(c):
+                    for b, j in enumerate(e):
+                        S[i, j] = S_ce[a, b]
+            yield S
+
+    def extended_steps(S_c):
+        if "e" not in types or not e:
+            yield sym.eye(n)
+            return
+        W_e = _cancel(W * S_c).extract(list(rows), e)
+        r = W_e.rank(simplify=True)
+        N = _null(W_e, len(e))
+        for E in combinations(rows, r):
+            A = W_e.extract(list(E), list(range(len(e))))
+            gram = _cancel(A * A.T)
+            if sym.cancel(gram.det()) == 0:
+                continue
+            yield _embed(_cancel(sym.Matrix.hstack(A.T * _quick_inv(gram), N)), e, n)
+
+    seen = set()
+    for S_c in compact_steps():
+        for S_e in extended_steps(S_c):
+            S = _cancel(S_c * S_e)
+            if S not in seen:
+                seen.add(S)
+                yield S
+
+
+def _clusters(W, n):
+    """Connected components of n modes, linked whenever one row of W acts on both."""
+    graph = nx.Graph()
+    graph.add_nodes_from(range(n))
+    for k in range(W.rows):
+        acted = [j for j in range(n) if sym.cancel(W[k, j]) != 0]
+        graph.add_edges_from(zip(acted, acted[1:]))
+    return sorted(tuple(sorted(cluster)) for cluster in nx.connected_components(graph))
+
+
+def junction_clusters(coords):
+    """Modes grouped by junction coupling: connected components of the graph linking any
+    two modes that share a junction, i.e. the nonzero pattern of the junction matrix.
+
+    :param coords: Retained Coordinates.
+    :returns: Sorted list of tuples of mode indices, in coords.types order.
+    """
+    return _clusters(coords.omega_J_tilde.T, len(coords.types))
+
+
+CLUSTER_DIMS = {"c": 40, "e": 100, "h": 20}
+
+
+def cluster_cost(coords, dims=None):
+    """Hilbert-space dimension of each junction cluster, largest first; compare lexicographically.
+
+    A cluster's dimension is the product of its modes' basis sizes, a proxy for the cost of
+    diagonalizing it on its own, as in hierarchical diagonalization.
+
+    :param coords: Retained Coordinates.
+    :param dims: Basis size per mode type; defaults to CLUSTER_DIMS (c: 40 charge states,
+        e: 100 phase-grid points, h: 20 oscillator states).
+    :returns: Tuple of cluster dimensions in decreasing order.
+    """
+    return _cluster_cost(junction_clusters(coords), coords.types, dims)
+
+
+def _cluster_cost(clusters, types, dims=None):
+    dims = CLUSTER_DIMS | (dims or {})
+    return tuple(sorted((reduce(lambda a, j: a * dims[types[j]], cluster, 1) for cluster in clusters), reverse=True))
+
+
+def hierarchical_decoupling(coords, types=("c", "e"), dims=None, *, clean=True):
+    """The junction inversion with the smallest junction clusters, for hierarchical diagonalization.
+
+    Ranks the identity and every S_1 of junction_inversions by cluster_cost; the first
+    of the cheapest wins. The cost is read from omega~_J^T S_1 without rebuilding the
+    coordinates: a noncompact column no junction acts on is harmonic, as in mode_types,
+    so an extended inversion can turn an extended column of a mixed basis harmonic.
+
+    :param coords: Retained Coordinates, in any column order.
+    :param types: Blocks to invert, as in junction_inversions.
+    :param dims: Basis size per mode type, as in cluster_cost.
+    :param bool clean: As in junction_inversions.
+    :returns: (S_1, cost); apply S_1 with transform or Result.transform.
+    """
+    W = coords.omega_J_tilde.T
+    n = len(coords.types)
+    best = None
+    for S in [sym.eye(n), *junction_inversions(coords, types, clean=clean)]:
+        W_S = _cancel(W * S)
+        new_types = tuple(t if t == "c" or any(W_S.col(j)) else "h" for j, t in enumerate(coords.types))
+        cost = _cluster_cost(_clusters(W_S, n), new_types, dims)
+        if best is None or cost < best[1]:
+            best = (S, cost)
+    return best
+
+
 def compact_charge_decoupling(coords):
     """S_1 that removes the charge coupling between compact and noncompact modes exactly.
 
@@ -328,16 +491,138 @@ def compact_charge_decoupling(coords):
     return _cancel(S)
 
 
-def transform(lag, coords, S1):
+def _gram_schmidt(vectors, form):
+    """Make the columns form-orthogonal, keeping their order (no normalization)."""
+    orthogonal = []
+    for v in vectors:
+        for u in orthogonal:
+            v = v - ((u.T * form * v)[0] / (u.T * form * u)[0]) * u
+        orthogonal.append(v.applyfunc(sym.cancel))
+    return orthogonal
+
+
+def normal_mode_decoupling(lag, coords, values=None):
+    """S_1 that removes every quadratic coupling: compact charge shear, then normal modes.
+
+    After compact_charge_decoupling, the noncompact block of C~ is
+    C = ((C~^{-1})_nn)^{-1} and that of L~* is unchanged, so the noncompact columns
+    become the solutions of L* x = lambda C x, i.e. eigenvectors of (C~^{-1})_nn L*.
+    Distinct eigenvalues are already C-orthogonal; degenerate eigenspaces are
+    C-orthogonalized by Gram-Schmidt. Extended and harmonic columns mix, so harmonic
+    modes generally become extended.
+
+    Symbolically (values=None) the eigenvalues are roots of a degree-N_n polynomial,
+    so this is only practical for two or three noncompact modes. With values, the
+    circuit parameters are substituted first and scipy.linalg.eigh(L*, C, type=1)
+    gives C-orthonormal columns, so the noncompact block of S_1 is floating point.
+
+    The new C~ and L~* are known by construction: the compact block of the shear and
+    diag(x_i^T C x_i), diag(x_i^T L* x_i) on the noncompact block. They are returned so
+    transform can skip recomputing them, which is slow when S_1 carries square roots.
+
+    :param lag: Node Lagrangian for the same circuit as coords.
+    :param coords: Retained Coordinates, in any column order.
+    :param values: Optional {symbol: number} substituted before diagonalizing.
+    :returns: (S_1, C_tilde, Lstar_tilde), S_1 in coords.types order; apply it with
+        transform(lag, coords, S_1, C_tilde=C_tilde, Lstar_tilde=Lstar_tilde).
+        C_tilde and Lstar_tilde are None when there is nothing to diagonalize.
+    """
+    # Count the noncompact modes, which are the last N_n columns of S_1.
+    eh = [j for j, t in enumerate(coords.types) if t != "c"]
+    n_non_compact = len(eh)
+    if n_non_compact == 0:
+        return sym.eye(len(coords.types)), None, None
+    
+    # Compact-charge decoupling
+    S_a = compact_charge_decoupling(coords)
+    if values is not None:
+        S_a = S_a.subs(values)
+    if n_non_compact == 1:
+        return S_a, None, None
+    coords_a = transform(lag, coords, S_a)
+    C_tilde, Lstar_tilde = coords_a.C_tilde.as_mutable(), coords_a.Lstar_tilde.as_mutable()
+    if values is not None:
+        C_tilde, Lstar_tilde = C_tilde.subs(values), Lstar_tilde.subs(values)
+    C_a = C_tilde.extract(eh, eh)
+    L_a = Lstar_tilde.extract(eh, eh)
+
+    # Normal-mode decoupling of the noncompact block
+    S_b = _normal_mode_block(C_a, L_a, values)
+
+    # Concatenate S_b with identity on the compact block
+    S_n = _embed(S_b, eh, len(coords.types))
+
+    # The noncompact blocks of C~ and L~* become diagonal
+    for a, i in enumerate(eh):
+        v = S_b[:, a]
+        for j in eh:
+            C_tilde[i, j] = Lstar_tilde[i, j] = 0
+        C_tilde[i, i] = _radical_cancel((v.T * C_a * v)[0])
+        Lstar_tilde[i, i] = _radical_cancel((v.T * L_a * v)[0])
+
+    # Return the product of the two transformations
+    return S_a * S_n, C_tilde, Lstar_tilde
+
+
+def _normal_mode_block(C_a, L_a, values=None):
+    """Columns x_i solving L_a x = lambda C_a x, C_a-orthogonal; C_a-orthonormal when numerical."""
+    # Numerical path
+    if values is not None:
+        _, X = eigh(np.array(L_a, dtype=float), np.array(C_a, dtype=float), type=1)
+        return sym.Matrix(X.tolist())
+    # Symbolic path
+    columns = []
+    C_a_inv = _quick_inv(C_a)
+    for eval, multiplicity, vectors in _cancel(C_a_inv*L_a).eigenvects(simplify=False):
+        columns += _gram_schmidt(vectors, C_a)
+    return sym.Matrix.hstack(*columns)
+
+
+def _embed(B, indices, n):
+    """n x n identity with B in the rows and columns indices."""
+    M = sym.eye(n)
+    for a, i in enumerate(indices):
+        for b, j in enumerate(indices):
+            M[i, j] = B[a, b]
+    return M
+
+
+def _radical_cancel(x):
+    """cancel, with each square root sqrt(D) a symbol r reduced mod r^2 - D and rationalized away below.
+
+    Normal modes of two noncompact modes carry one sqrt of the discriminant, which
+    plain cancel expands as an independent generator; reducing mod r^2 - D lets
+    the entries that vanish by construction cancel to 0.
+    """
+    x = sym.sympify(x)
+    roots = {p.base: sym.Dummy("r") for p in x.atoms(sym.Pow) if p.exp.is_Rational and p.exp.q == 2}
+    if not roots:
+        return sym.cancel(x)
+    x = x.replace(lambda e: e.is_Pow and e.base in roots and e.exp.is_Rational and e.exp.q == 2,
+                  lambda e: roots[e.base] ** e.exp.p)
+    num, den = sym.fraction(sym.cancel(x))
+    for D, r in roots.items():
+        num, den = sym.rem(num, r**2 - D, r), sym.rem(den, r**2 - D, r)
+        if den.has(r):  # den = a + b r; multiply through by a - b r
+            conjugate = den.subs(r, -r)
+            num, den = sym.rem(sym.expand(num * conjugate), r**2 - D, r), sym.rem(sym.expand(den * conjugate), r**2 - D, r)
+    return sym.cancel(num / den).xreplace({r: sym.sqrt(D) for D, r in roots.items()})
+
+
+def transform(lag, coords, S1, *, C_tilde=None, Lstar_tilde=None):
     """Apply Z -> Z S_1, rebuild from lag, and classify the final columns.
 
     The allowed mixing follows eq:S1_structure and eq:Scc_unimodular;
     cancellations can restore harmonic axes inside the extended block.
     The new compact columns are Z_c S_cc, so their periods stay primitive.
+    Z_full gains blockdiag(S_1, I) on the right, so the new R is S_1^{-1} R and the
+    full node matrix is not inverted again.
 
     :param lag: Node Lagrangian for the same circuit as coords.
     :param coords: Current retained coordinates.
     :param S1: Invertible matrix satisfying residual mixing and compact-period constraints.
+    :param C_tilde: Optional S1^T C~ S1, when already known; passed to coordinates.
+    :param Lstar_tilde: Optional S1^T L~* S1, likewise.
     :returns: New Coordinates with node matrix coords.Z * S1.
     :raises ValueError: Invalid dimensions, disallowed mixing, or nonprimitive compact periods.
     """
@@ -348,4 +633,4 @@ def transform(lag, coords, S1):
     Z = coords.Z * S
     for j, index in enumerate(retained):
         Z_full[:, index] = Z[:, j]
-    return coordinates(lag, Z_full)
+    return coordinates(lag, Z_full, C_tilde=C_tilde, Lstar_tilde=Lstar_tilde, R=_quick_inv(S) * coords.R)

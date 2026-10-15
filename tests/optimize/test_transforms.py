@@ -1202,12 +1202,28 @@ def test_node_space_matrices_match_sircuitenum():
 
 
 def choose(circuit, edges, return_instance=True):
-    """sircuitenum's choose_Z(circuit, edges) through circuit_quantization and choose_S1."""
-    from circuit_quantization.optimize import choose_S1
+    """sircuitenum's choose_Z(circuit, edges) through choose_S1 and, for instances, choose_instance."""
+    from circuit_quantization.optimize import candidate, choose_instance, choose_S1, h_hash
     lag = cq.lagrangian(to_circuit(circuit, edges))
     coords = cq.decouple(lag, *cq.mode_basis(lag), check=False)
-    S1s, h_class = choose_S1(lag, coords, return_instance=return_instance)
-    return lag, coords, S1s, h_class
+    S1s, h_class = choose_S1(lag, coords)
+    if not return_instance:
+        return lag, coords, S1s, h_class
+    # choose_Z's instance stage: each tied family's minimum-weight integer instance, skipping
+    # families that cannot reach the best weight so far, ranked by H_hash with extra_nl.
+    best, best_hash, best_weight = [], None, None
+    for S in S1s:
+        found = choose_instance(lag, coords, S, max_weight=best_weight)
+        if found is None:
+            continue
+        S_instance, weight = found
+        val = h_hash(candidate(lag, coords, S_instance, instance=True))
+        assert val[2] == weight  # choose_instance's weight is H_hash's instance cost
+        if best_hash is None or val < best_hash:
+            best, best_hash, best_weight = [S_instance], val, weight
+        elif val == best_hash:
+            best.append(S_instance)
+    return lag, coords, best, best_hash
 
 
 def test_choose_S1_reproduces_choose_Z():

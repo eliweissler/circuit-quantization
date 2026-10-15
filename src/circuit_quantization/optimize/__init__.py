@@ -4,12 +4,21 @@ Needs the optional dependencies: the Singular binary (conda-forge ``singular``),
 ``z3-solver``, and ``func-timeout``; ``environment.yml`` installs all three.
 Nothing in the core package imports this subpackage.
 
-    from circuit_quantization.optimize import choose_S1
-    S1s, h_class = choose_S1(result.lag, result.coords)
-    best = result.transform(S1s[0])
+    from circuit_quantization.optimize import choose_instance, choose_S1
+    S1s, h_class = choose_S1(result.lag, result.coords)        # families, free entries symbolic
+    S1, weight = choose_instance(result.lag, result.coords, S1s[0])
+    best = result.transform(S1)
 """
 
-from .choose import Candidate, choose_S1, h_hash
-from .patterns import by_cost, most_zeros_first
+from .choose import (
+    Candidate, candidate, choose_instance, choose_S1, cluster_score, compact_alignments, h_hash, instance,
+    junction_seeds,
+)
+from .patterns import Seed, by_clusters, by_cost, most_zeros_first
+from .stages import ALLOWED_BLOCKS, SIRCUITENUM, SIRCUITENUM_BLOCKS, Stage
 
-__all__ = ["Candidate", "by_cost", "choose_S1", "h_hash", "most_zeros_first"]
+__all__ = [
+    "ALLOWED_BLOCKS", "Candidate", "SIRCUITENUM", "SIRCUITENUM_BLOCKS", "Seed", "Stage", "by_clusters", "by_cost",
+    "candidate", "choose_S1", "choose_instance", "cluster_score", "compact_alignments", "h_hash", "instance",
+    "junction_seeds", "most_zeros_first",
+]

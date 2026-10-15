@@ -1,6 +1,12 @@
-"""--runslow, as in sircuitenum's tests/conftest.py: tests marked slow run only when asked."""
+"""Shared test setup: tests/circuits.py on the import path, and --runslow as in sircuitenum's conftest."""
+
+import sys
+from pathlib import Path
 
 import pytest
+
+# tests/circuits.py holds the notes' circuits; make it importable from subdirectories too.
+sys.path.insert(0, str(Path(__file__).parent))
 
 
 def pytest_addoption(parser):
