@@ -13,7 +13,9 @@ import json
 import math
 from os import PathLike
 from pathlib import Path
+import random
 import re
+import unicodedata
 
 import sympy as sym
 from sympy.printing.julia import JuliaCodePrinter
@@ -37,6 +39,9 @@ _TOKEN = re.compile(
     re.UNICODE,
 )
 _PRECEDENCE = {"+": 10, "-": 10, "*": 20, "/": 20, "//": 25, "^": 40}
+# Julia 1.13 Base.Unicode._julia_charmap, applied before NFC (not NFKC).
+# Only the letter mappings can occur in our portable identifier subset.
+_JULIA_CHARMAP = str.maketrans({"ɛ": "ε", "µ": "μ", "·": "⋅", "·": "⋅", "−": "-", "ℏ": "ħ"})
 
 
 class _SpecPrinter(JuliaCodePrinter):
@@ -59,6 +64,13 @@ def _name(name, field):
     # Use a portable subset of Julia identifiers, including Greek letters.
     if not isinstance(name, str) or not _IDENTIFIER.fullmatch(name) or name in _RESERVED or not name.strip("_"):
         _fail(field, f"invalid or reserved parameter name {name!r}")
+    _canonical_name(name, field)
+
+
+def _canonical_name(name, field):
+    canonical = unicodedata.normalize("NFC", name.translate(_JULIA_CHARMAP))
+    if name != canonical:
+        _fail(field, f"identifier {name!r} is not canonical in Julia; use {canonical!r}")
 
 
 def _tokens(source, field):
@@ -71,6 +83,8 @@ def _tokens(source, field):
         match = _TOKEN.match(source, pos)
         if match is None:
             _fail(field, f"unsupported expression syntax near {source[pos:pos + 24]!r}")
+        if match.lastgroup == "name":
+            _canonical_name(match.group(), field)
         tokens.append((match.lastgroup, match.group()))
         pos = match.end()
     return tokens
@@ -94,6 +108,7 @@ class _ExpressionParser:
         self.symbols = symbols
         self.field = field
         self.index = 0
+        self.syntax = None
 
     def peek(self):
         kind, token = self.tokens[self.index]
@@ -110,10 +125,12 @@ class _ExpressionParser:
         self.index += 1
         if token in ("+", "-"):
             value = self.expression(30)
+            syntax = (token, self.syntax)
             if token == "-":
                 value = -value
         elif token == "(":
             value = self.expression()
+            syntax = self.syntax
             self.take(")")
         elif kind == "number":
             # Preserve all printed decimal digits (and at least binary64 precision).
@@ -123,16 +140,20 @@ class _ExpressionParser:
                 value = sym.Float(token, max(15, digits))
             else:
                 value = sym.Integer(token)
+            syntax = ("number", value)
         elif kind == "name":
             if self.peek() == "(":
                 if token not in _FUNCTIONS:
                     _fail(self.field, f"function {token!r} is not allowed")
                 self.take("(")
                 args = [self.expression()]
+                arg_syntax = [self.syntax]
                 while self.peek() == ",":
                     self.take(",")
                     args.append(self.expression())
+                    arg_syntax.append(self.syntax)
                 self.take(")")
+                syntax = (token, *arg_syntax)
                 if token == "log" and len(args) == 2:
                     value = sym.log(args[1], args[0])  # Julia log(base, x).
                 elif len(args) == 1:
@@ -141,8 +162,10 @@ class _ExpressionParser:
                     _fail(self.field, f"wrong number of arguments for {token}")
             elif token in _CONSTANTS:
                 value = _CONSTANTS[token]
+                syntax = ("name", token)
             elif token in self.symbols:
                 value = self.symbols[token]
+                syntax = ("name", token)
             else:
                 _fail(self.field, f"undeclared or forbidden symbol {token!r}")
         else:
@@ -152,6 +175,7 @@ class _ExpressionParser:
             operator = self.peek()
             self.index += 1
             right = self.expression(_PRECEDENCE[operator] + (operator != "^"))
+            syntax = (operator, syntax, self.syntax)
             if operator == "+":
                 value += right
             elif operator == "-":
@@ -165,19 +189,55 @@ class _ExpressionParser:
             else:
                 value **= right
             value = _real_expression(value, self.field)
+        self.syntax = syntax
         return value
 
 
-def _expression(source, symbols, field):
+def _expression(source, symbols, field, *, with_syntax=False):
     if not isinstance(source, str) or not source.strip():
         _fail(field, "expected a nonempty expression string")
     try:
         parser = _ExpressionParser(source, symbols, field)
         result = parser.expression()
         parser.take("")
-        return result
+        return (result, parser.syntax) if with_syntax else result
     except (TypeError, ZeroDivisionError, OverflowError, RecursionError) as error:
         _fail(field, f"invalid expression ({type(error).__name__})")
+
+
+def _check_symmetric(rows, syntax, symbols, field):
+    """Mirror Julia's syntactic gate and three-point relative comparison.
+
+    Inspect and evaluate the source, not simplified SymPy expressions: abs(x)^2
+    simplifies to x^2 and sqrt(-x)^2 to -x, hiding nonanalyticity/domain failures.
+    All allowed names are real and complex constructs are already forbidden,
+    so abs/sign are the only possible nonanalytic calls in this grammar;
+    real sqrt/log/power domain failures are caught during sampled evaluation.
+    """
+    for i in range(len(rows)):
+        for j in range(i + 1, len(rows)):
+            left, right = rows[i][j], rows[j][i]
+            if left == right or syntax[i][j] == syntax[j][i]:
+                continue
+            pair = f"{field}[{i},{j}] = {left!r} and {field}[{j},{i}] = {right!r}"
+            tokens = _tokens(left, field) + _tokens(right, field)
+            if any(kind == "name" and name in ("abs", "sign") for kind, name in tokens):
+                _fail(field, f"must be symmetric, but {pair} are not identical and not real-analytic")
+            deps = sorted({name for kind, name in tokens if kind == "name" and name in symbols})
+            # Same seed, interval, count and tolerance as Julia _test_points;
+            # Python's RNG stream is independent of Julia's implementation.
+            rng = random.Random(0x6B66)
+            for _ in range(3):
+                point = {name: sym.Float(0.5 + 1.5 * rng.random()) for name in deps}
+                try:
+                    a = float(_expression(left, point, field))
+                    b = float(_expression(right, point, field))
+                    if not (math.isfinite(a) and math.isfinite(b)):
+                        raise ValueError("nonfinite value")
+                except (ValueError, TypeError, OverflowError) as error:
+                    _fail(field, f"must be symmetric, but {pair} cannot be evaluated at a test point ({error})")
+                if abs(a - b) > 1e-12 * max(abs(a), abs(b)):
+                    _fail(field, f"must be symmetric, but {pair} differ")
 
 
 def _object(value, required, optional, field):
@@ -296,11 +356,12 @@ def load_spec(source) -> HamiltonianSpec:
 
     def matrix(key):
         rows = _array(source[key], size, key)
-        return sym.ImmutableMatrix(size, size, [
-            _expression(value, symbols, f"{key}[{i},{j}]")
-            for i, row in enumerate(rows)
+        parsed = [[
+            _expression(value, symbols, f"{key}[{i},{j}]", with_syntax=True)
             for j, value in enumerate(_array(row, size, f"{key}[{i}]"))
-        ])
+        ] for i, row in enumerate(rows)]
+        _check_symmetric(rows, [[syntax for _, syntax in row] for row in parsed], symbols, key)
+        return sym.ImmutableMatrix([[value for value, _ in row] for row in parsed])
 
     def vector(key):
         return sym.ImmutableMatrix(size, 1, [

@@ -401,3 +401,106 @@ def test_voltage_bias_on_noncompact_mode_round_trips():
     assert sym.simplify(loaded.n_g[0] - expected) == 0
     assert not any(s.name.startswith("n_g") for s in loaded.parameters)
     assert sym.simplify(loaded.hamiltonian() - real_symbols(cq.subs_constants(res.H))) == 0
+
+
+@pytest.fixture
+def two_mode_spec(spec):
+    spec.update(parameters=["a", "b", "g", "x"],
+                modes=[{"name": "p", "type": "e"}, {"name": "q", "type": "e"}],
+                E_C=[["a", "0"], ["0", "a"]], E_L=[["a", "0"], ["0", "a"]],
+                flux_linear=["0", "0"], n_g=["0", "0"], cosines=[])
+    return spec
+
+
+@pytest.mark.parametrize("key", ["E_C", "E_L"])
+@pytest.mark.parametrize("left,right", [("a", "b"), ("2*x", "x"), ("0", "1e-30")])
+def test_nonsymmetric_matrix_is_rejected(two_mode_spec, key, left, right):
+    two_mode_spec[key][0][1], two_mode_spec[key][1][0] = left, right
+    with pytest.raises(ValueError, match="symmetric") as error:
+        cq.load_spec(two_mode_spec)
+    assert f"{key}[0,1]" in str(error.value)
+    assert f"{key}[1,0]" in str(error.value)
+    assert repr(left) in str(error.value) and repr(right) in str(error.value)
+
+
+@pytest.mark.parametrize("left,right", [
+    ("abs(x)", "x"), ("abs(x)^2", "x^2"), ("abs(-1)", "1"),
+    ("0*sign(x)", "0"), ("abs(x)+x", "x+abs(x)"),
+])
+def test_nonanalytic_symmetry_pair_is_rejected_before_simplification(two_mode_spec, left, right):
+    two_mode_spec["E_C"][0][1], two_mode_spec["E_C"][1][0] = left, right
+    with pytest.raises(ValueError, match="not real-analytic"):
+        cq.load_spec(two_mode_spec)
+
+
+@pytest.mark.parametrize("left,right", [
+    ("abs(x)", "abs(x)"), ("(abs(x))", "abs( x )"),
+    ("sign(x) .* x", "sign(x) * x"), ("g/8", "0.125*g"),
+    ("2*x", "x+x"), ("(x+1)^2", "x^2+2*x+1"),
+    ("sin(x)^2+cos(x)^2", "1"), ("sqrt(x)", "x^0.5"),
+])
+def test_symmetric_functions_load(two_mode_spec, left, right):
+    two_mode_spec["E_C"][0][1], two_mode_spec["E_C"][1][0] = left, right
+    cq.load_spec(two_mode_spec)
+
+
+@pytest.mark.parametrize("left,right", [
+    ("sqrt(-a)", "sqrt(-b)"), ("sqrt(-x)^2", "-x"),
+    ("log(-x)-log(-x)", "0"), ("exp(1000*x)", "exp(1001*x)"),
+])
+def test_symmetry_function_domain_failures_are_rejected(two_mode_spec, left, right):
+    two_mode_spec["E_L"][0][1], two_mode_spec["E_L"][1][0] = left, right
+    with pytest.raises(ValueError, match="cannot be evaluated"):
+        cq.load_spec(two_mode_spec)
+
+
+def test_export_rejects_nonsymmetric_matrix():
+    circuit = fluxonium_pair()
+    res = cq.quantize(circuit, cq.Loops.from_circuit(circuit, zero_capacitive=True))
+    ec = sym.ImmutableMatrix([[1, 2], [3, 1]])
+    with pytest.raises(ValueError, match="E_C.*symmetric"):
+        cq.to_spec(replace(res, ham=replace(res.ham, E_C=ec)))
+
+
+@pytest.mark.parametrize("alias,canonical", [
+    ("µ", "μ"), ("ɛ", "ε"), ("ℏ", "ħ"), ("K", "K"),
+    ("Ω", "Ω"), ("Å", "Å"), ("E_µ", "E_μ"),
+])
+def test_julia_identifier_aliases_are_rejected(spec, alias, canonical):
+    spec["parameters"] += [alias, canonical]
+    with pytest.raises(ValueError, match="canonical") as error:
+        cq.load_spec(spec)
+    assert canonical in str(error.value)
+    res = fluxonium()
+    res = replace(res, lag=replace(res.lag, EJ=(sym.Symbol(alias, real=True),)))
+    with pytest.raises(ValueError, match="canonical"):
+        cq.to_spec(res)
+
+
+def test_alias_in_expression_is_rejected(spec):
+    spec["parameters"].append("μ")
+    spec["constant"] = "µ"
+    with pytest.raises(ValueError, match="canonical"):
+        cq.load_spec(spec)
+
+
+def test_canonical_unicode_names_and_euler_constant_remain_distinct(spec):
+    # Julia uses NFC plus a small custom map, not blanket NFKC folding.
+    # Mathematical mu remains distinct; Euler's ℯ must not become reserved e.
+    spec["parameters"] += ["μ", "ε", "ħ", "K", "Ω", "Å", "𝜇"]
+    spec["constant"] = "μ + ε + ħ + K + Ω + Å + 𝜇 + ℯ"
+    loaded = cq.load_spec(spec)
+    assert len(loaded.constant.free_symbols) == 7
+    assert loaded.constant.has(sym.E)
+    res = fluxonium()
+    res = replace(res, lag=replace(res.lag, EJ=(loaded.constant,)))
+    assert cq.load_spec(cq.to_spec(res)).cosines[0][0] == loaded.constant
+
+
+def test_large_integer_literals_remain_exact(spec):
+    value = 44173801000000000000000000000000
+    spec["constant"] = f"{value} + 1"
+    assert cq.load_spec(spec).constant == value + 1
+    res = fluxonium()
+    res = replace(res, lag=replace(res.lag, EJ=(sym.Integer(value),)))
+    assert cq.load_spec(cq.to_spec(res)).cosines[0][0] == value

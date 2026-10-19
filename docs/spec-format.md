@@ -34,12 +34,19 @@ For manageable symbolic coefficients, use `ghz_to_farad(E_C)`, `ghz_to_henry(E_L
 | `units` | string | `"GHz"`; always emitted, defaults to GHz when omitted on import. |
 | `parameters` | array of strings | Required, unique declared real parameter names in binding order. |
 | `modes` | nonempty array of objects | Required, unique nonempty `name` labels and `type` values `c`, `e`, or `h`. |
-| `E_C`, `E_L` | arrays of arrays of expression strings | Required, each exactly N by N, where N is the number of modes. |
+| `E_C`, `E_L` | arrays of arrays of expression strings | Required, symmetric, each exactly N by N, where N is the number of modes. |
 | `flux_linear`, `n_g` | arrays of expression strings | Required, each of length N. |
 | `cosines` | array of objects | Required, possibly empty; each object requires `energy`, `omega`, and `offset`. |
 | `constant` | expression string | Optional additive energy, default `"0"`. |
 | `charge_cosines` | array | Shared-format extension for phase slips; this Python version accepts only an absent or empty array. |
 | `_generator` | object | Export provenance: `package`, installed `version` (or `"unknown"`), and ordered branch names in `branches`. |
+
+For both energy matrices, opposite off-diagonal entries must represent the same function; nonsymmetric input is rejected rather than averaged.
+Identical expression text or equivalent parsed syntax (ignoring whitespace, redundant parentheses, and arithmetic dots) passes directly, including identical `abs` or `sign` calls.
+Otherwise, a pair containing `abs` or `sign` is rejected as non-analytic before SymPy simplification can erase those calls.
+The remaining pairs are evaluated at three fixed pseudorandom real parameter points in `[0.5, 2]`, in sorted parameter-name order, and must agree to `1e-12` relative to the larger magnitude, with no absolute tolerance floor.
+Domain errors and nonfinite results reject the pair; evaluation uses the original expressions so a simplification such as `sqrt(-x)^2 -> -x` cannot hide a domain error.
+This follows Julia's validation criteria, but Python and Julia use independent random-number streams; finite sampling is a consistency check, not an exhaustive identity proof.
 
 Mode types mean compact (`c`), extended (`e`), and harmonic (`h`).
 All matrices, vectors, and cosine multipliers follow `modes` order, which export takes from `res.coords.types`.
@@ -75,6 +82,8 @@ Expressions contain decimal integer or floating-point literals (optionally with 
 + - * / ^ // sqrt exp cos sin tan cosh sinh tanh log abs sign conj real imag
 ```
 
+Consumers must parse integer literals with arbitrary precision: SI-valued exports can contain exact integers far beyond 64 bits, such as `44173801000000000000000000000000`.
+
 The dotted operators `.+`, `.-`, `.*`, `./`, and `.^` have the same scalar meanings.
 Operator precedence follows [Julia's arithmetic precedence](https://docs.julialang.org/en/v1/manual/mathematical-operations/#Operator-Precedence-and-Associativity): powers, unary signs, rational division `//`, multiplication/division, and addition/subtraction.
 Powers associate to the right; the remaining binary operations associate to the left.
@@ -83,6 +92,9 @@ Named functions take one argument, except `log(base, value)`, which is also supp
 Implicit multiplication, dotted function calls, assignments, indexing, attributes, strings, comments, and other executable constructs are not part of this grammar.
 
 Parameter names use a portable subset of Julia identifiers: a Unicode letter or underscore followed by letters, digits, or underscores, excluding all-underscore names, Julia keywords, constants, and function names.
+Python requires canonical Julia spelling in both declarations and expression references: identifiers changed by NFC normalization or Julia's custom character map are rejected with the canonical spelling suggested.
+For example, use `μ` rather than `µ`, `ε` rather than `ɛ`, and `ħ` rather than `ℏ`; this prevents declarations such as `["µ", "μ"]` from becoming duplicate names in Julia.
+This is NFC plus [Julia's identifier character transformations](https://docs.julialang.org/en/v1/stdlib/Unicode/#Unicode.julia_chartransform), not general NFKC normalization: `ℯ` remains Euler's constant and mathematical-letter variants that Julia keeps distinct remain distinct here.
 In particular `pi`, `π`, `ℯ`, `e`, `im`, `cis`, and `cispi` are reserved.
 Every referenced parameter must be declared; unused declared parameters are allowed on import.
 The exporter lists free parameters in first textual appearance order through `E_C` (row-major), `E_L`, `flux_linear`, `n_g`, and each cosine's energy and offset.
