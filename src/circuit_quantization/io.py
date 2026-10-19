@@ -6,6 +6,7 @@ Python/Julia source code; parameter symbols have real=True assumptions.
 See docs/spec-format.md for the interchange contract and unsupported features.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 import json
@@ -325,16 +326,29 @@ def load_spec(source) -> HamiltonianSpec:
                            _expression(source.get("constant", "0"), symbols, "constant"))
 
 
-def to_spec(res, *, subs=None, simplify=True) -> dict:
+def to_spec(res, *, subs=None, simplify=True, mode_names=None) -> dict:
     """Convert a quantization Result into a JSON-ready Hamiltonian dictionary.
 
     :param res: Quantization Result; only its retained dynamical modes are saved.
     :param subs: Optional SymPy substitution mapping, applied before exact SI
         physical constants are evaluated; does not mutate res.
-    :param bool simplify: Cancel rational expressions before printing (default True).
+    :param bool simplify: Combine rational denominators and cancel before printing
+        (default True).
+    :param mode_names: Optional sequence of unique, nonempty labels, in retained
+        mode order. Defaults to varphi_1...varphi_N; does not rename coordinates
+        or compact-sector parameters (use subs for parameter renaming).
     :returns: Version 1 kronfree-spec dictionary with coefficients in GHz.
     :raises ValueError: Unsupported expression, parameter name, or cosine vector.
     """
+    size = len(res.coords.types)
+    if mode_names is None:
+        mode_names = [f"varphi_{i + 1}" for i in range(size)]
+    if isinstance(mode_names, (str, bytes)) or not isinstance(mode_names, Sequence):
+        _fail("mode_names", "expected a sequence of labels")
+    if len(mode_names) != size or any(not isinstance(name, str) or not name for name in mode_names):
+        _fail("mode_names", f"expected {size} nonempty string labels")
+    if len(set(mode_names)) != size:
+        _fail("mode_names", "labels must be unique")
     symbols = {}
 
     def prepare(expr):
@@ -342,7 +356,9 @@ def to_spec(res, *, subs=None, simplify=True) -> dict:
         if subs is not None:
             expr = expr.subs(subs)
         expr = subs_constants(expr)
-        return sym.cancel(expr) if simplify else expr
+        # Combine nested denominators before polynomial expansion: cancel alone
+        # can take minutes on substituted coupled-circuit charging energies.
+        return sym.cancel(sym.together(expr)) if simplify else expr
 
     def coefficient(expr, field):
         expr = _real_expression(prepare(expr), field)
@@ -371,7 +387,7 @@ def to_spec(res, *, subs=None, simplify=True) -> dict:
     def vector(values, field):
         return [coefficient(value, f"{field}[{i}]") for i, value in enumerate(values)]
 
-    modes = [{"name": f"varphi_{i + 1}", "type": typ} for i, typ in enumerate(res.coords.types)]
+    modes = [{"name": name, "type": typ} for name, typ in zip(mode_names, res.coords.types)]
     data = {"format": "kronfree-spec", "version": 1, "units": "GHz", "parameters": [], "modes": modes}
     data["E_C"], data["E_L"] = matrix(res.ham.E_C, "E_C"), matrix(res.ham.E_L, "E_L")
     linear = res.coords.omega_L_tilde * res.ham.E_Lb * res.B[list(res.lag.L), :] * res.ham.varphi_ext
@@ -411,7 +427,7 @@ def save_spec(res, path, **kwargs) -> dict:
 
     :param res: Quantization Result to export.
     :param path: Destination str or PathLike, overwritten only after validation.
-    :param kwargs: Forwarded to to_spec (subs and simplify).
+    :param kwargs: Forwarded to to_spec (subs, simplify, and mode_names).
     :returns: The JSON-ready dictionary written to path.
     """
     data = to_spec(res, **kwargs)

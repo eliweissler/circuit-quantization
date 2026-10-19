@@ -45,7 +45,15 @@ Mode types mean compact (`c`), extended (`e`), and harmonic (`h`).
 All matrices, vectors, and cosine multipliers follow `modes` order, which export takes from `res.coords.types`.
 Only retained dynamical modes are exported; free, frozen, and cyclic coordinates are not modes in this file.
 Mode names are descriptive labels: `HamiltonianSpec.hamiltonian()` uses real coordinate symbols `varphi_1` through `varphi_N` and `n_1` through `n_N`, in mode order.
+Pass `mode_names=("theta", "phi", "zeta")` to `to_spec` or `save_spec` to choose labels; otherwise they default to `varphi_1` through `varphi_N`.
+The sequence must contain exactly N unique, nonempty strings.
 Parameter names that collide with these coordinate symbols are rejected by Python.
+
+Compact-sector parameters retain their quantization names `n_g<k>`, where k is the one-based index among **all retained modes**, not just compact modes.
+For example, mode types `(c, e, c)` have sector labels `n_g1` and `n_g3`.
+Changing `mode_names` does not rename these parameters or change the Hamiltonian.
+To choose sector names, use the existing substitution interface, for example `subs={sym.Symbol("n_g3", real=True): sym.Symbol("n_g_theta2", real=True)}`.
+This keeps existing quantization results compatible while allowing a consumer's naming convention.
 
 Each cosine has an expression string `energy`, a length-N array `omega` of finite JSON numbers, and an expression string `offset`.
 Its contribution is **minus** `energy * cos(omegaᵀ varphi + offset)`.
@@ -116,14 +124,82 @@ Voltage-source contributions and compact-sector labels are retained in `n_g` wit
 
 ## Python interface and Julia handoff
 
-`to_spec(res, *, subs=None, simplify=True)` produces the dictionary without modifying `res`.
-Substitutions are applied before exact physical constants are evaluated; `simplify=True` cancels rational expressions before printing.
+`to_spec(res, *, subs=None, simplify=True, mode_names=None)` produces the dictionary without modifying `res`.
+Substitutions are applied before exact physical constants are evaluated; `simplify=True` combines denominators with `sympy.together` before `sympy.cancel`, avoiding costly expansion of nested substituted fractions.
 `save_spec(res, path, **kwargs)` validates the dictionary before opening the destination, writes indented UTF-8 JSON, and returns that dictionary.
 `load_spec(source)` accepts a dictionary, JSON text, or a path, and returns a frozen `HamiltonianSpec` with immutable matrices and tuples.
 Use `pathlib.Path` for filenames that could be mistaken for JSON text, for example a filename beginning with a digit.
 Calling `spec.hamiltonian()` assembles the saved Hamiltonian without repeating mode classification, basis selection, or flux assignment.
 It does not restore `Result`, circuit objects, intermediate quantization matrices, or coordinate-transformation methods.
 
-Julia integration remains a separate task: the consumer must accept the printer's dotted arithmetic operators before relying on all exported files.
+Julia consumers must accept the printer's dotted arithmetic operators.
 The Python tests verify round trips and format validation; they do not establish Julia loading or spectral equivalence.
-No Julia code or fixtures are changed by this implementation.
+
+## Flux choices and comparison conventions
+
+`Loops.from_circuit(circuit)` assigns a symbolic flux to every fundamental loop, including capacitively broken loops such as the J1–Cc–J2 loop of two capacitively coupled transmons.
+Those fluxes are physical inputs and are preserved in the exported cosine offsets and linear terms; large exact conversion factors appear if a remaining flux parameter is measured in webers.
+For a model where all capacitively broken loops carry zero flux, construct `loops = cq.Loops.from_circuit(circuit, zero_capacitive=True)` before quantization.
+For finer control, use the `fluxes` mapping in `Loops.from_tree` or `Loops.from_branch_dict`, or explicitly substitute unwanted flux parameters to zero on export.
+Nonzero flux in such a loop can be intentional, so export does not warn or silently zero it.
+
+Coefficient comparisons also require matching the coordinate basis, flux gauge, parameter conventions, and constant energy reference.
+The default irrotational flux assignment can put flux into `flux_linear` where another package puts it into junction offsets.
+For a static flux these descriptions are related by a coordinate shift, potentially with a flux-only energy difference because this package drops that constant from the source Hamiltonian.
+Use a custom `B` in `quantize` to match the other package's gauge explicitly; the complete matrix must satisfy `loops.G * B = I`, including rows for capacitors.
+For time-dependent flux, a different `B` can also introduce derivative contributions to `n_g`; a static coordinate shift alone does not describe the full transformed dynamics.
+
+### A zero-pi junction-offset gauge
+
+This self-contained example puts half of the ring flux on each junction, producing the zero-pi Josephson potential `-2*E_J*cos(theta)*cos(phi - varphi_ext/2)` used by scqubits at symmetry.
+The harmonic zeta coordinate is scaled to the FullZeroPi convention.
+The capacitive-loop fluxes are explicitly zero, but the capacitor rows of `B` are still needed for the loop constraints.
+
+```python
+import sympy as sym
+import circuit_quantization as cq
+
+ECJ, ECB, EL, EJ = sym.symbols("E_CJ E_CB E_L E_J", positive=True)
+flux = sym.Symbol("varphi_ext", real=True)
+circuit = cq.Circuit([
+    cq.Branch("J1", 1, 2, C=cq.ghz_to_farad(ECJ), EJ=EJ),
+    cq.Branch("J2", 3, 4, C=cq.ghz_to_farad(ECJ), EJ=EJ),
+    cq.Branch("L1", 2, 3, L=cq.ghz_to_henry(EL)),
+    cq.Branch("L2", 4, 1, L=cq.ghz_to_henry(EL)),
+    cq.Branch("C1", 1, 3, C=cq.ghz_to_farad(ECB)),
+    cq.Branch("C2", 2, 4, C=cq.ghz_to_farad(ECB)),
+])
+cycles = {
+    "ring": {"J1": 1, "J2": 1, "L1": 1, "L2": 1},
+    "t1": {"J1": 1, "L1": 1, "C1": -1},
+    "t2": {"J2": 1, "L1": 1, "C2": -1},
+}
+loops = cq.Loops.from_branch_dict(circuit, cycles, {
+    "ring": cq.phase_to_weber(-flux), "t1": 0, "t2": 0,
+})
+s = 1 / sym.sqrt(2)
+Z = sym.Matrix([[1, 1, s, 1], [-1, -1, s, 1],
+                [-1, 1, -s, 1], [1, -1, -s, 1]]) / 2
+half = sym.Rational(1, 2)
+# Rows: C1, C2, J1, J2, L1, L2; columns: ring, t1, t2.
+assert circuit.branch_names == ("C1", "C2", "J1", "J2", "L1", "L2")
+B = sym.Matrix([[half, -1, 0], [half, 0, -1],
+                [half, 0, 0], [half, 0, 0], [0, 0, 0], [0, 0, 0]])
+assert loops.G * B == sym.eye(3)
+res = cq.quantize(circuit, loops, Z, ("c", "e", "h", "cy"), B=B)
+data = cq.to_spec(res, mode_names=("theta", "phi", "zeta"))
+spec = cq.load_spec(data)
+assert spec.flux_linear == sym.zeros(3, 1)
+assert all(offset == -flux / 2 for _, _, offset in spec.cosines)
+```
+
+### FullZeroPi asymmetry and sign conventions
+
+The built-in scqubits `FullZeroPi` model uses a first-order expansion in capacitance asymmetries, while this package computes the circuit's exact inverse capacitance matrix.
+After matching conventions, expect exact agreement at zero capacitance asymmetry and second-order charging-matrix differences away from it; see [Groszkowski et al., equations (4)–(5)](https://arxiv.org/html/1708.02886v1#S2).
+This limitation concerns that built-in approximate model, not a general scqubits `Circuit` constructed from the same branches.
+
+For scqubits **4.3.1**, `ZeroPi.sparse_kinetic_mat` (also used by FullZeroPi) implements the junction-capacitance cross term with the opposite sign to the paper and its own documented `dCJ = (CJ1 - CJ2)/CJavg` convention; the `dEJ` potential term follows the paper.
+With the junction ordering and phases in the example above, compare using `dCJ_scqubits = -dCJ_circuit` while keeping `dEJ` unchanged; see the [scqubits ZeroPi source](https://scqubits.readthedocs.io/en/v4.3/_modules/scqubits/core/zeropi.html).
+Check this convention again when changing scqubits versions, particularly when both junction asymmetries are nonzero.
+Also align offset-charge conventions and additive energy constants before comparing Hamiltonians or absolute energies.

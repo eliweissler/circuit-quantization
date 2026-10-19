@@ -3,7 +3,11 @@
 from dataclasses import FrozenInstanceError, replace
 import json
 import math
+import os
+from pathlib import Path
 import random
+import subprocess
+import sys
 
 import pytest
 import sympy as sym
@@ -316,3 +320,84 @@ def test_nested_validation_and_no_input_aliasing(spec):
     spec["cosines"][0]["typo"] = 1
     with pytest.raises(ValueError, match="typo"):
         cq.load_spec(spec)
+
+
+def test_substituted_rational_coefficient_finishes():
+    # Julia integration's two-zero-pi E_C[theta1, theta1] used to hang in
+    # cancel after substitution. Isolate it so a regression fails in 20 s
+    # rather than hanging the suite. The expected result is exact.
+    script = """
+from dataclasses import replace
+import sympy as sym
+import circuit_quantization as cq
+x_B1, x_J1, x_B2, x_J2, x_c = sym.symbols('x_B1 x_J1 x_B2 x_J2 x_c', positive=True)
+E_CS1, E_CS2, E_CJ1, E_CJ2, g = sym.symbols('E_CS1 E_CS2 E_CJ1 E_CJ2 g', positive=True)
+e00 = x_B1*x_J1*(x_B2*x_J2 + 4*x_B2*x_c + 4*x_J2*x_c) / (2*(
+    x_B1*x_B2*x_J1 + x_B1*x_B2*x_J2 + 4*x_B1*x_B2*x_c
+    + x_B1*x_J1*x_J2 + 4*x_B1*x_J2*x_c + x_B2*x_J1*x_J2
+    + 4*x_B2*x_J1*x_c + 4*x_J1*x_J2*x_c))
+subs = {
+    x_c: (16*E_CS1*E_CS2 - g**2) / (16*g),
+    x_J1: (-16*E_CJ1*E_CS1*E_CS2 + E_CJ1*g**2) / (8*E_CJ1*g - 16*E_CS1*E_CS2 + g**2),
+    x_B1: (16*E_CJ1*E_CS1*E_CS2 - E_CJ1*g**2) / (16*E_CJ1*E_CS2 + 4*E_CJ1*g - 16*E_CS1*E_CS2 + g**2),
+}
+swap = {E_CS1: E_CS2, E_CS2: E_CS1, E_CJ1: E_CJ2}
+subs[x_J2], subs[x_B2] = subs[x_J1].xreplace(swap), subs[x_B1].xreplace(swap)
+circuit = cq.Circuit([cq.Branch('J', 1, 0, C=1, EJ=1)], ground=0)
+res = cq.quantize(circuit, cq.Loops.from_branch_dict(circuit, {}))
+res = replace(res, ham=replace(res.ham, E_C=sym.ImmutableMatrix([[e00]])))
+loaded = cq.load_spec(cq.to_spec(res, subs=subs))
+assert loaded.E_C[0] == sym.Symbol('E_CS1', real=True) / 2
+"""
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(Path(cq.__file__).parents[1]), *sys.path]))
+    subprocess.run([sys.executable, "-c", script], env=env, check=True, capture_output=True, text=True, timeout=20)
+
+
+def test_custom_mode_names_and_sector_renaming(tmp_path):
+    # Compact sectors use their retained-mode indices, including intervening
+    # harmonic modes: n_g1 and n_g3, not compact-only indices 1 and 2.
+    circuit = cq.Circuit([
+        cq.Branch("J1", 1, 0, C=1, EJ=1), cq.Branch("J2", 3, 0, C=1, EJ=1),
+        cq.Branch("C", 2, 0, C=1), cq.Branch("L", 2, 0, L=1),
+    ], ground=0)
+    res = cq.quantize(circuit, cq.Loops.from_circuit(circuit, zero_capacitive=True),
+                      Z_full=sym.eye(3), types=("c", "h", "c"))
+    ng1, ng3, ng_theta1, ng_theta2 = sym.symbols("n_g1 n_g3 n_g_theta1 n_g_theta2", real=True)
+    assert res.ham.n_g == sym.ImmutableMatrix([ng1, 0, ng3])
+    names = ("theta1", "resonator", "theta2")
+    data = cq.to_spec(res, mode_names=names)
+    assert [m["name"] for m in data["modes"]] == list(names)
+    assert cq.load_spec(data).hamiltonian() == cq.load_spec(cq.to_spec(res)).hamiltonian()
+    path = tmp_path / "named.json"
+    cq.save_spec(res, path, mode_names=names, subs={ng1: ng_theta1, ng3: ng_theta2})
+    loaded = cq.load_spec(path)
+    assert loaded.n_g == sym.ImmutableMatrix([ng_theta1, 0, ng_theta2])
+    assert loaded.hamiltonian() == cq.load_spec(data).hamiltonian().subs({ng1: ng_theta1, ng3: ng_theta2})
+
+
+@pytest.mark.parametrize("names", [[], ["one", "two"], "phi", [""], [1], {"phi"}, {"phi": 1}])
+def test_invalid_mode_names(names):
+    with pytest.raises(ValueError, match="mode_names"):
+        cq.to_spec(fluxonium(), mode_names=names)
+
+
+def test_duplicate_mode_names():
+    circuit = fluxonium_pair()
+    res = cq.quantize(circuit, cq.Loops.from_circuit(circuit, zero_capacitive=True))
+    with pytest.raises(ValueError, match="mode_names"):
+        cq.to_spec(res, mode_names=["phi", "phi"])
+
+
+def test_voltage_bias_on_noncompact_mode_round_trips():
+    cj, cg, voltage = sym.symbols("C_J C_g V", positive=True)
+    circuit = cq.Circuit([
+        cq.Branch("J", 1, 0, C=cj, EJ=1), cq.Branch("L", 1, 0, L=1),
+        cq.Branch("Cg", 1, 2, C=cg), cq.Branch("V", 0, 2, V=voltage),
+    ], ground=0)
+    res = cq.quantize(circuit, cq.Loops.from_circuit(circuit, zero_capacitive=True))
+    assert res.coords.types == ("e",)
+    loaded = cq.load_spec(cq.to_spec(res))
+    expected = real_symbols(cq.subs_constants(-cg * voltage / (2 * cq.units.e)))
+    assert sym.simplify(loaded.n_g[0] - expected) == 0
+    assert not any(s.name.startswith("n_g") for s in loaded.parameters)
+    assert sym.simplify(loaded.hamiltonian() - real_symbols(cq.subs_constants(res.H))) == 0

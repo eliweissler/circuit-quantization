@@ -58,13 +58,16 @@ The loaded `HamiltonianSpec` contains immutable matrices, cosine terms, and real
 Parameter names survive, but extra SymPy assumptions such as positivity are not serialized.
 Use the symbols in `spec.parameters` when substituting values into the loaded Hamiltonian.
 Coordinates are real `varphi_1, ...` and `n_1, ...` in mode order.
+Use `mode_names=("theta", "phi", "zeta")` for descriptive labels on a three-mode export; coordinate symbols and sector parameters keep their original naming rules.
+Compact-sector labels use all retained-mode indices (`n_g1`, `n_g3` for types `c, e, c`); rename them explicitly through `subs` when another package uses different names.
 
 The GHz parametrization in the example keeps the exported coefficients compact.
 For an SI-parametrized circuit, pass `subs={C_J: cq.ghz_to_farad(EC)}` to `to_spec` or `save_spec`, using the original capacitance symbol `C_J`, to express it as an energy before export.
 Unsubstituted parameters keep their original units, while Hamiltonian coefficients remain in GHz.
+If capacitively broken loops should carry no flux, construct the loops with `Loops.from_circuit(circuit, zero_capacitive=True)` before quantization; export preserves any nonzero loop fluxes supplied.
 Unsupported expressions and symbolic or noninteger compact cosine multipliers raise `ValueError` rather than producing an incompatible file.
 Phase-slip terms, extra operators, and noise channels are deferred.
-See [the format specification](docs/spec-format.md) for all fields, validation rules, precision conventions, and the separate Julia integration requirement for dotted arithmetic.
+See [the format specification](docs/spec-format.md) for all fields, validation rules, precision conventions, and a worked junction-offset flux gauge for zero-pi comparisons.
 
 ## Conventions
 
