@@ -14,6 +14,7 @@ Each module follows one section of the notes, and comments cite the notes' equat
 | `flux.py` | Sec V | irrotational flux assignment `B` |
 | `hamiltonian.py` | Sec IV, VI | `H/h` in GHz |
 | `quantize.py` | | runs the whole chain |
+| `io.py` | | symbolic Hamiltonian save/load and JSON interchange |
 
 ## Example
 
@@ -36,6 +37,34 @@ res = quantize(fluxonium, loops)
 res            # renders H_GHz in a notebook
 res.ham.E_C, res.B # intermediate matrices use their notes names
 ```
+
+## Save and load Hamiltonians
+
+Save a quantized Hamiltonian for later Python use or export it to KronFreeCircuits using the version 1 `kronfree-spec` JSON format.
+Loading reconstructs its symbolic coefficients without repeating quantization.
+
+```python
+cq.save_spec(res, "fluxonium.json")
+spec = cq.load_spec("fluxonium.json")  # also accepts a dict or JSON text
+H = spec.hamiltonian()               # H/h in GHz
+spec.E_C, spec.E_L, spec.parameters, spec.modes
+
+# Or exchange a JSON-ready dictionary without writing a file:
+data = cq.to_spec(res)
+assert cq.load_spec(data) == spec
+```
+
+The loaded `HamiltonianSpec` contains immutable matrices, cosine terms, and real parameter symbols; it does not restore the full quantization `Result`.
+Parameter names survive, but extra SymPy assumptions such as positivity are not serialized.
+Use the symbols in `spec.parameters` when substituting values into the loaded Hamiltonian.
+Coordinates are real `varphi_1, ...` and `n_1, ...` in mode order.
+
+The GHz parametrization in the example keeps the exported coefficients compact.
+For an SI-parametrized circuit, pass `subs={C_J: cq.ghz_to_farad(EC)}` to `to_spec` or `save_spec`, using the original capacitance symbol `C_J`, to express it as an energy before export.
+Unsubstituted parameters keep their original units, while Hamiltonian coefficients remain in GHz.
+Unsupported expressions and symbolic or noninteger compact cosine multipliers raise `ValueError` rather than producing an incompatible file.
+Phase-slip terms, extra operators, and noise channels are deferred.
+See [the format specification](docs/spec-format.md) for all fields, validation rules, precision conventions, and the separate Julia integration requirement for dotted arithmetic.
 
 ## Conventions
 

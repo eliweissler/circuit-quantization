@@ -32,6 +32,7 @@ from .circuit import Branch, Circuit, incidence
 from .draw import draw_circuit_diagram
 from .flux import irrotational_B
 from .hamiltonian import hamiltonian, simplify_hamiltonian
+from .io import HamiltonianSpec, load_spec, save_spec, to_spec
 from .lagrangian import lagrangian
 from .loops import Loops, branch_dict_to_G, check_loops, cycle_bases, default_tree, spanning_trees, tree_to_G
 from .modes import (
