@@ -504,3 +504,17 @@ def test_large_integer_literals_remain_exact(spec):
     res = fluxonium()
     res = replace(res, lag=replace(res.lag, EJ=(sym.Integer(value),)))
     assert cq.load_spec(cq.to_spec(res)).cosines[0][0] == value
+
+
+def test_static_split_flux_offsets_round_trip():
+    # eq:particular_static_split: static pi on J, symbolic offset on L.
+    base = fluxonium()
+    delta = sym.Symbol("delta", real=True)
+    loops = cq.Loops.from_tree(base.circuit, cq.default_tree(base.circuit), {"L": cq.phase_to_weber(sym.pi + delta)})
+    B_J, B_L = sym.ImmutableMatrix([[-1], [0]]), sym.ImmutableMatrix([[0], [1]])
+    assert loops.G * B_J == sym.eye(1) and loops.G * B_L == sym.eye(1)
+    split = cq.quantize(base.circuit, loops, B=B_L, B_static=B_J, static={"L": cq.phase_to_weber(sym.pi)})
+    loaded = cq.load_spec(cq.to_spec(split))
+    assert loaded.cosines[0][2] == -sym.pi
+    assert loaded.flux_linear[0].has(delta) and not loaded.flux_linear[0].has(sym.pi)
+    assert sym.simplify(loaded.hamiltonian() - real_symbols(cq.subs_constants(split.H))) == 0

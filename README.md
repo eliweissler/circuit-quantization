@@ -91,6 +91,11 @@ Junction capacitance and an inductor's parallel capacitance
 do not break a superconducting loop. The default remains `False`, so setting
 these physical fluxes to zero is an explicit choice.
 
+A static bias may take its own flux assignment (notes `apx:static_split`).
+Pass `B_static` with `static={loop name: flux}` to `quantize`: `B_static` places the static part, `B` places the remainder `Phi_ext - static`, and only `B` enters the EMF drive, so the irrotational condition constrains `B` alone.
+For example, the static half flux can sit on a junction, `cos(x + pi) = -cos x`, while a modulated offset stays on a capacitance-free inductor.
+`res.ham.varphi_b` holds the resulting dimensionless branch offsets.
+
 Tuple entries identify one simple loop; they need not follow traversal order.
 The incidence matrix determines relative signs, with the first listed branch
 fixed to +1. Reordering that first branch can reverse the flux convention.

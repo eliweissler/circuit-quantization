@@ -451,9 +451,9 @@ def to_spec(res, *, subs=None, simplify=True, mode_names=None) -> dict:
     modes = [{"name": name, "type": typ} for name, typ in zip(mode_names, res.coords.types)]
     data = {"format": "kronfree-spec", "version": 1, "units": "GHz", "parameters": [], "modes": modes}
     data["E_C"], data["E_L"] = matrix(res.ham.E_C, "E_C"), matrix(res.ham.E_L, "E_L")
-    linear = res.coords.omega_L_tilde * res.ham.E_Lb * res.B[list(res.lag.L), :] * res.ham.varphi_ext
+    linear = res.coords.omega_L_tilde * res.ham.E_Lb * res.ham.varphi_b[list(res.lag.L), :]
     data["flux_linear"], data["n_g"] = vector(linear, "flux_linear"), vector(res.ham.n_g, "n_g")
-    offsets = res.B[list(res.lag.J), :] * res.ham.varphi_ext
+    offsets = res.ham.varphi_b[list(res.lag.J), :]
     cosines = []
     for k, branch in enumerate(res.lag.J):
         field = f"junction {res.circuit.branch_names[branch]}"

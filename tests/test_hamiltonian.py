@@ -249,3 +249,61 @@ def test_result_transform_accepts_an_irrotational_B_equal_to_its_loop_constraint
     assert result.loops.G * result.B != sym.eye(3)
     assert result.transform(sym.eye(3)).H == result.H
 
+
+
+def split_fluxonium(offset):
+    """Fluxonium at static half flux plus `offset`, loop f = J - L (G = [1, -1])."""
+    EC, EL, EJ = pos("E_C E_L E_J")
+    circuit = Circuit([
+        Branch("J", 1, 0, C=cq.ghz_to_farad(EC), EJ=EJ),
+        Branch("L", 1, 0, L=cq.ghz_to_henry(EL)),
+    ], ground=0)
+    loops = Loops.from_branch_dict(circuit, {"f": ("J", "L")}, {"f": cq.phase_to_weber(sym.pi + offset)})
+    return circuit, loops, (EC, EL, EJ)
+
+
+def test_static_split_puts_bias_on_junction_and_offset_on_inductor():
+    # eq:particular_static_split: static pi on J, offset on the capacitance-free L.
+    d = sym.Function("d", real=True)(sym.Symbol("t", real=True))  # Circuit's default time symbol
+    circuit, loops, (EC, EL, EJ) = split_fluxonium(d)
+    assert d.has(circuit.t)
+    B_J, B_L = sym.ImmutableMatrix([1, 0]), sym.ImmutableMatrix([0, -1])
+    result = quantize(circuit, loops, B=B_L, B_static=B_J, static={"f": cq.phase_to_weber(sym.pi)})
+
+    assert result.ham.varphi_b == sym.Matrix([sym.pi, -d])
+    assert not result.ham.n_g.has(sym.Derivative)  # only B sets the EMF drive
+    assert quantize(circuit, loops, B=B_J).ham.n_g.has(sym.Derivative)  # whole flux on J drives it
+
+    phase, charge, sector = result.ham.varphi[0], result.ham.n[0], result.ham.n_g[0]
+    expected = 4 * EC * (charge - sector) ** 2 + EL * phase ** 2 / 2 - EL * d * phase + EJ * sym.cos(phase)
+    assert sym.simplify(result.H - expected) == 0
+
+
+def test_static_split_with_equal_assignments_matches_single_assignment():
+    circuit, loops, _ = split_fluxonium(sym.Symbol("delta", real=True))
+    B = sym.ImmutableMatrix([0, -1])
+    split = quantize(circuit, loops, B=B, B_static=B, static={"f": cq.phase_to_weber(sym.pi)})
+    assert sym.simplify(split.H - quantize(circuit, loops, B=B).H) == 0
+
+
+def test_static_split_survives_transform():
+    circuit, loops, _ = split_fluxonium(sym.Symbol("delta", real=True))
+    static = {"f": cq.phase_to_weber(sym.pi)}
+    result = quantize(circuit, loops, B=sym.ImmutableMatrix([0, -1]), B_static=sym.ImmutableMatrix([1, 0]),
+                      static=static)
+    moved = result.transform(sym.eye(1))
+    assert (moved.B_static, moved.static) == (result.B_static, result.static)
+    assert moved.H == result.H
+
+
+def test_static_split_rejects_incomplete_or_invalid_input():
+    circuit, loops, _ = split_fluxonium(sym.Symbol("delta", real=True))
+    B, static = sym.ImmutableMatrix([0, -1]), {"f": cq.phase_to_weber(sym.pi)}
+    with pytest.raises(ValueError, match="together"):
+        quantize(circuit, loops, B=B, B_static=B)
+    with pytest.raises(ValueError, match="together"):
+        quantize(circuit, loops, B=B, static=static)
+    with pytest.raises(ValueError, match="unknown loops"):
+        quantize(circuit, loops, B=B, B_static=B, static={"g": 0})
+    with pytest.raises(ValueError, match="B_static"):
+        quantize(circuit, loops, B=B, B_static=sym.ImmutableMatrix([2, 0]), static=static)

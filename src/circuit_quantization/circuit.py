@@ -111,14 +111,15 @@ class Branch:
         # At most one of L, EJ
         if self.L is not None and self.EJ is not None:
             raise ValueError(f"Branch {self.name!r} may carry at most one of L, EJ")
-        # Valid capacitance, inductance, and Josephson energy values
-        if not (self.C == 0 or self.C.is_positive):
+        # Valid capacitance, inductance, and Josephson energy values; only explicit numbers are
+        # checked, so symbolic values such as C_J*(1 + epsilon) are accepted as given.
+        if self.C.is_number and self.C.is_negative:
             raise ValueError(f"Branch {self.name!r}: C must be 0 or positive")
         if self.type in ("C", "J") and self.C == 0:
             raise ValueError(f"Branch {self.name!r}: a {self.type} branch needs C > 0")
         for attr in ("L", "EJ"):
             value = getattr(self, attr)
-            if value is not None and value.is_positive is False:
+            if value is not None and value.is_number and not value.is_positive:
                 raise ValueError(f"Branch {self.name!r}: {attr} must be positive")
 
     @property

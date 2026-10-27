@@ -21,6 +21,8 @@ class Result:
     coords: Coordinates
     B: sym.ImmutableMatrix
     ham: Hamiltonian
+    B_static: sym.ImmutableMatrix | None = None  # assignment of the static bias, eq:particular_static_split
+    static: sym.ImmutableMatrix | None = None  # static loop fluxes [Wb], loops order
 
     @property
     def H(self):
@@ -41,17 +43,18 @@ class Result:
         :param S1: Invertible residual transformation with new node matrix Z * S1.
             Must obey allowed mode mixing and compact-period constraints.
         :param bool simplify: Simplify the rebuilt Hamiltonian.
-        :returns: New Result with the same B; the original is unchanged.
+        :returns: New Result with the same B and static assignment; the original is unchanged.
         :raises ValueError: Disallowed mixing or an invalid transformation.
         """
-        return _result(self.circuit, self.loops, self.lag, transform(self.lag, self.coords, S1), simplify, B=self.B)
+        return _result(self.circuit, self.loops, self.lag, transform(self.lag, self.coords, S1), simplify,
+                       B=self.B, B_static=self.B_static, static=self.static)
 
     def _repr_latex_(self):
         counts = ", ".join(f"{t}: {k}" for t, k in Counter(self.coords.types).items())
         return f"$\\displaystyle H_{{\\mathrm{{GHz}}}} = {sym.latex(self.H)}$  (modes {counts})"
 
 
-def quantize(circuit, loops, Z_full=None, types=None, *, simplify=False, B=None):
+def quantize(circuit, loops, Z_full=None, types=None, *, simplify=False, B=None, B_static=None, static=None):
     """Quantize with an automatic or explicit basis; optionally simplify the final H.
 
     :param circuit: Circuit with SI element values and junction energies in GHz.
@@ -63,8 +66,12 @@ def quantize(circuit, loops, Z_full=None, types=None, *, simplify=False, B=None)
     :param B: Optional branch-by-loop flux assignment, in circuit.branch_names
         and loops.names order. Must satisfy loops.G * B = I. None selects the
         irrotational assignment; a custom assignment can introduce an EMF drive.
+    :param B_static: Optional separate assignment for the static part of the loop fluxes
+        (eq:particular_static_split). Must satisfy loops.G * B_static = I and be given with static.
+        B then places only the offsets loops.Phi_ext - static and alone sets the EMF drive.
+    :param static: {loop name: static flux [Wb]} for B_static; omitted loops have none.
     :returns: Result containing lag, coords, B, ham, and H in GHz.
-    :raises ValueError: Mismatched circuit/loops or an invalid coordinate basis.
+    :raises ValueError: Mismatched circuit/loops, an invalid coordinate basis, or an invalid assignment.
     """
     if loops.circuit != circuit:
         raise ValueError("loops must belong to the circuit being quantized")
@@ -75,18 +82,33 @@ def quantize(circuit, loops, Z_full=None, types=None, *, simplify=False, B=None)
         raise ValueError("Z_full and types must be supplied together")
     else:
         coords = decouple(lag, Z_full, types)
-    return _result(circuit, loops, lag, coords, simplify, B=B)
+    if (B_static is None) != (static is None):
+        raise ValueError("B_static and static must be supplied together")
+    if static is not None:
+        unknown = set(static) - set(loops.names)
+        if unknown:
+            raise ValueError(f"static names unknown loops: {sorted(unknown)}")
+        static = sym.ImmutableMatrix([static.get(name, 0) for name in loops.names])
+    return _result(circuit, loops, lag, coords, simplify, B=B, B_static=B_static, static=static)
 
 
-def _result(circuit, loops, lag, coords, simplify, *, B=None):
+def _check_assignment(loops, B, name):
+    if not (loops.G * sym.ImmutableMatrix(B) - sym.eye(loops.G.rows)).applyfunc(sym.cancel).is_zero_matrix:
+        raise ValueError(f"{name} must satisfy G * {name} = I")  # exact only after cancel, e.g. irrotational B
+
+
+def _result(circuit, loops, lag, coords, simplify, *, B=None, B_static=None, static=None):
     """Flux assignment and Hamiltonian for given coordinates (Sec V, Sec IV)."""
     if B is None:
         B = irrotational_B(lag, coords, loops)
     else:
-        if not (loops.G * sym.ImmutableMatrix(B) - sym.eye(loops.G.rows)).applyfunc(sym.cancel).is_zero_matrix:
-            raise ValueError("B must satisfy G * B = I")  # exact only after cancel, e.g. irrotational B
-    ham = hamiltonian(lag, coords, loops, B, circuit.t, simplify=simplify)
-    return Result(circuit=circuit, loops=loops, lag=lag, coords=coords, B=B, ham=ham)
+        _check_assignment(loops, B, "B")
+    if B_static is not None:
+        B_static = sym.ImmutableMatrix(B_static)
+        _check_assignment(loops, B_static, "B_static")
+    ham = hamiltonian(lag, coords, loops, B, circuit.t, simplify=simplify, B_static=B_static, static=static)
+    return Result(circuit=circuit, loops=loops, lag=lag, coords=coords, B=B, ham=ham,
+                  B_static=B_static, static=static)
 
 
 def numerify(obj, values):
