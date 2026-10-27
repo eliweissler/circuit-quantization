@@ -11,11 +11,21 @@ C, EJ, L = sym.symbols("C E_J L", positive=True)
     (dict(C=0, EJ=EJ), "needs C > 0"),
     (dict(C=C, L=L, EJ=EJ), "at most one"),
     (dict(C=C, V=1), "may carry only V"),
-    (dict(C=sym.Symbol("x")), "C must be 0 or positive"),
+    (dict(C=-1), "C must be 0 or positive"),
+    (dict(C=C, L=-2), "L must be positive"),
+    (dict(C=C, EJ=0), "EJ must be positive"),
 ])
 def test_branch_validation(kwargs, message):
     with pytest.raises(ValueError, match=message):
         Branch("b", 1, 0, **kwargs)
+
+
+def test_branch_accepts_symbolic_values_of_unknown_sign():
+    eps, x = sym.Symbol("epsilon", real=True), sym.Symbol("x")
+    junction = Branch("J1", 1, 0, C=C * (1 + eps), EJ=EJ * (1 - eps))
+    assert junction.C == C * (1 + eps) and junction.EJ == EJ * (1 - eps)
+    assert Branch("b", 1, 0, C=x).C == x
+    assert Branch("L1", 1, 0, L=-L).L == -L  # provably negative, but symbolic
 
 
 @pytest.mark.parametrize("name,kind,variables", [

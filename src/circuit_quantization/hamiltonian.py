@@ -15,6 +15,7 @@ class Hamiltonian:
     n: sym.ImmutableMatrix
     n_g: sym.ImmutableMatrix
     varphi_ext: sym.ImmutableMatrix
+    varphi_b: sym.ImmutableMatrix  # dimensionless branch flux offsets, eq:particular_static_split
     E_C: sym.ImmutableMatrix
     E_L: sym.ImmutableMatrix
     E_Lb: sym.ImmutableMatrix
@@ -35,34 +36,39 @@ def simplify_hamiltonian(H):
     return sym.Add(*(sym.factor(term) for term in sym.Add.make_args(H)))
 
 
-def hamiltonian(lag, coords, loops, B, t, *, simplify=False):
+def hamiltonian(lag, coords, loops, B, t, *, simplify=False, B_static=None, static=None):
     N_d = coords.Z.cols
     varphi = sym.ImmutableMatrix(sym.symbols(f"varphi_1:{N_d + 1}", real=True))
     n = sym.ImmutableMatrix(sym.symbols(f"n_1:{N_d + 1}", real=True))
     Phi_ext = loops.Phi_ext
     varphi_ext = weber_to_phase(Phi_ext)  # eq:dimless_defs
+    # eq:particular_static_split: B_static places the static bias (Wb, loops order), B the rest.
+    if B_static is None:
+        varphi_b = B * varphi_ext
+    else:
+        varphi_static = weber_to_phase(static)
+        varphi_b = B_static * varphi_static + B * (varphi_ext - varphi_static)
+    varphi_b = sym.ImmutableMatrix(varphi_b)
 
     # eq:EC_EL_matrix: scale inverse-element matrices by the unit-element energies.
     E_C = _cancel(farad_to_ghz(1) * coords.C_tilde_inv)
     E_L = _cancel(henry_to_ghz(1) * coords.Lstar_tilde)
     E_Lb = _cancel(henry_to_ghz(1) * lag.Lb_inv)
 
-    # eq:Q_g_tilde_expanded; the flux term vanishes for irrotational B.
+    # eq:Q_g_tilde_expanded; the flux term vanishes for irrotational B. Only B carries a rate.
     Q_g = coords.Z.T * (-lag.C_int_src * lag.V + lag.Omega_int * lag.C_b * B * Phi_ext.diff(t))
     # Each compact mode also carries a static sector label (Sec IV.B.1).
     sector = [sym.Symbol(f"n_g{j + 1}", real=True) if typ == "c" else 0 for j, typ in enumerate(coords.types)]
     n_g = _cancel(Q_g / (2 * e)) + sym.Matrix(sector)
 
-    B_L = B[list(lag.L), :]
-    B_J = B[list(lag.J), :]
     q = n - n_g
     H = 4 * (q.T * E_C * q)[0]  # charging
     H += (varphi.T * E_L * varphi)[0] / 2  # inductive
-    H += (varphi.T * coords.omega_L_tilde * E_Lb * B_L * varphi_ext)[0]  # inductive-flux cross term
-    junction_phase = coords.omega_J_tilde.T * varphi + B_J * varphi_ext
+    H += (varphi.T * coords.omega_L_tilde * E_Lb * varphi_b[list(lag.L), :])[0]  # inductive-flux cross term
+    junction_phase = coords.omega_J_tilde.T * varphi + varphi_b[list(lag.J), :]
     H -= sum(EJ * sym.cos(phase) for EJ, phase in zip(lag.EJ, junction_phase))  # Josephson
 
     return Hamiltonian(
         H=simplify_hamiltonian(H) if simplify else H, varphi=varphi, n=n, n_g=n_g,
-        varphi_ext=varphi_ext, E_C=E_C, E_L=E_L, E_Lb=E_Lb,
+        varphi_ext=varphi_ext, varphi_b=varphi_b, E_C=E_C, E_L=E_L, E_Lb=E_Lb,
     )

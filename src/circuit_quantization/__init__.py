@@ -30,7 +30,7 @@ Symbols in the notes and their names here:
 
 from .circuit import Branch, Circuit, incidence
 from .draw import draw_circuit_diagram
-from .flux import irrotational_B
+from .flux import irrotational_B, B_from_shares
 from .hamiltonian import hamiltonian, simplify_hamiltonian
 from .io import HamiltonianSpec, load_spec, save_spec, to_spec
 from .lagrangian import lagrangian
