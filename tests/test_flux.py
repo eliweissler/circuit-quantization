@@ -1,7 +1,8 @@
+import pytest
 import sympy as sym
 
 from circuit_quantization import (
-    Branch, Circuit, Loops, decouple, default_tree, irrotational_B, lagrangian, mode_basis,
+    Branch, Circuit, Loops, decouple, default_tree, irrotational_B, lagrangian, mode_basis, quantize,
 )
 from circuits import (
     HARMONIUM_CYCLES, HARMONIUM_Z, KITE_CYCLES, KITE_Z, RHOMBUS_CYCLES, RHOMBUS_Z,
@@ -138,3 +139,43 @@ def test_irrotational_assignment_satisfies_both_constraints():
     B = irrotational_B(lag, coords, loops)
     assert (loops.G * B - sym.eye(loops.G.rows)).applyfunc(sym.cancel).is_zero_matrix
     assert (coords.Z.T * lag.Omega_int * lag.C_b * B).applyfunc(sym.cancel).is_zero_matrix
+
+
+def driven_tunable_transmon():
+    """Tunable transmon coupled through Cc to an Lr || Cr resonator, driven through Cd by V."""
+    CJ1, CJ2, Cc, Cr, Cd, Lr = pos("C_J1 C_J2 C_c C_r C_d L_r")
+    circuit = Circuit([
+        Branch("J1", 1, 0, C=CJ1, EJ=1), Branch("J2", 1, 0, C=CJ2, EJ=1),
+        Branch("Cc", 1, 2, C=Cc), Branch("Lr", 2, 0, L=Lr, C=Cr),
+        Branch("Cd", 2, "s", C=Cd), Branch("V", "s", 0, V=sym.Symbol("V", real=True)),
+    ], ground=0)
+    loops = Loops.from_branch_dict(circuit, {"x": ("J1", "J2"), "y": ("Cc", "J2", "Lr"), "z": ("Cd", "Lr", "V")})
+    return circuit, loops, (CJ1, CJ2, Cc, Cr, Cd)
+
+
+def test_source_branch_carries_no_irrotational_flux():
+    # A source branch is pinned at V(t) and never enters H, so flux assigned to it would be dropped.
+    circuit, loops, (CJ1, CJ2, Cc, Cr, Cd) = driven_tunable_transmon()
+    B = assign(circuit, loops)
+    names = list(circuit.branch_names)
+    assert B[names.index("V"), :].is_zero_matrix
+    passive = [k for k, b in enumerate(circuit.branches) if b.type != "V"]
+    G_passive = loops.G[:, passive]
+    assert (G_passive * B[passive, :] - sym.eye(3)).applyfunc(sym.cancel).is_zero_matrix
+    C_s = Cc * (Cr + Cd) / (Cc + Cr + Cd)
+    assert sym.simplify(B[names.index("J1"), 0] - (CJ2 + C_s) / (CJ1 + CJ2 + C_s)) == 0
+
+
+def test_custom_assignment_on_source_branch_is_rejected():
+    circuit, loops, _ = driven_tunable_transmon()
+    names = list(circuit.branch_names)
+    B = sym.zeros(len(names), 3)
+    B[names.index("J1"), 0] = 1
+    B[names.index("Cc"), 1] = 1
+    B[names.index("Cd"), 2] = 1
+    quantize(circuit, loops, B=B)
+    B[names.index("Cd"), 2] = 0
+    B[names.index("V"), 2] = 1  # G * B = I still holds through the source branch
+    assert (loops.G * B - sym.eye(3)).is_zero_matrix
+    with pytest.raises(ValueError, match="source branch"):
+        quantize(circuit, loops, B=B)

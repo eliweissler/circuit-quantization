@@ -51,6 +51,9 @@ from .modes import (
     residual_freedom,
     transform,
 )
+from .numerical import cost_localization, cost_normal_modes, cost_targeted, numerical_S1, parameterization
+from .product_state import (NumericHamiltonian, cost_product_state, exact_ground_state, infidelity, subspace_infidelity,
+                            normal_mode_transformation, numeric_hamiltonian, product_state, product_state_S1)
 from .quantize import Result, numerify, quantize
 from .qpackage_interface import scqubits_yaml, to_scqubits
 from .units import (

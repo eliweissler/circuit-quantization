@@ -95,6 +95,9 @@ def quantize(circuit, loops, Z_full=None, types=None, *, simplify=False, B=None,
 def _check_assignment(loops, B, name):
     if not (loops.G * sym.ImmutableMatrix(B) - sym.eye(loops.G.rows)).applyfunc(sym.cancel).is_zero_matrix:
         raise ValueError(f"{name} must satisfy G * {name} = I")  # exact only after cancel, e.g. irrotational B
+    sources = [k for k, b in enumerate(loops.circuit.branches) if b.type == "V"]
+    if sources and not sym.ImmutableMatrix(B)[sources, :].applyfunc(sym.cancel).is_zero_matrix:
+        raise ValueError(f"{name} must not assign flux to a source branch, which is pinned at V(t)")
 
 
 def _result(circuit, loops, lag, coords, simplify, *, B=None, B_static=None, static=None):

@@ -13,13 +13,22 @@ def irrotational_B(lag, coords, loops):
     equivalently Z^T C_int W = 0 (eq:R_capacitance). Z^+ W = 0 is not the
     correct condition after truncation. Choosing W = 0 leaves this formula unchanged.
 
+    Source branches are pinned at V(t) and never enter H, so flux assigned to one
+    would be dropped. G^+ is therefore the right inverse over the passive branches
+    only, and the source rows of B are zero.
+
     :param lag: Node Lagrangian matrices.
     :param coords: Decoupled retained coordinates.
     :param loops: Complete cycle basis and branch ordering for the circuit.
     :returns: Branch-by-loop flux assignment matrix B, satisfying G * B = I.
     """
     G, Z, Omega_int = loops.G, coords.Z, lag.Omega_int
-    G_plus = G.T * (G * G.T).inv()  # eq:G_right_inverse
+    passive = [k for k, b in enumerate(loops.circuit.branches) if b.type != "V"]
+    G_p = G[:, passive]
+    G_p_plus = G_p.T * (G_p * G_p.T).inv()  # eq:G_right_inverse on passive branches
+    G_plus = sym.zeros(G.cols, G.rows)
+    for i, k in enumerate(passive):
+        G_plus[k, :] = G_p_plus[i, :]
     drive = _cancel(Z.T * Omega_int * lag.C_b * G_plus)
     X = _cancel(coords.C_tilde_inv * drive)
     return _cancel(G_plus - Omega_int.T * Z * X)
