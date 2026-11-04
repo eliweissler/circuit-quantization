@@ -1,364 +1,419 @@
 # circuit-quantization
 
-Symbolic quantization of lumped superconducting circuits, written as a companion to the notes
-*Matrix Formulation of Circuit Quantization: Lagrangian, External Flux, and Frequency Units*.
-Each module follows one section of the notes, and comments cite the notes' equation labels.
+`circuit-quantization` builds symbolic Hamiltonians for lumped superconducting
+circuits. Define capacitors, Josephson junctions, inductors, voltage sources,
+and loop fluxes. The package then constructs the circuit matrices, separates
+the dynamical modes, removes nondynamical coordinates, assigns external flux,
+and returns the Hamiltonian in GHz.
 
-| Module | Notes | Contents |
+The package supports grounded and floating circuits, compact and noncompact
+coordinates, automatic or user-supplied mode bases, coordinate optimization,
+JSON interchange, circuit drawing, and export to scqubits.
+
+## Highlights
+
+- Symbolic circuit construction with exact SymPy expressions.
+- Automatic classification of compact, extended, harmonic, free, frozen, and
+  cyclic modes.
+- Consistent loop bases and irrotational external-flux assignment.
+- Hamiltonians in the standard reduced-phase and Cooper-pair-number variables.
+- Exact compact-charge shears, analytic normal modes, and numerical searches
+  over valid residual coordinate transformations.
+- Optional symbolic coordinate optimization with Singular and Z3.
+- JSON serialization, Schemdraw diagrams, and scqubits export.
+- Experimental product-state and hierarchical-basis tools for comparing
+  coordinate choices in nonlinear circuits.
+
+## Installation
+
+Python 3.11 or newer is required. Install the package from the repository:
+
+```bash
+git clone https://github.com/eliweissler/circuit-quantization.git
+cd circuit-quantization
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+The editable install is convenient for notebooks and local development. Use
+`python -m pip install .` instead if you do not want an editable checkout.
+
+Optional features are grouped as extras:
+
+| Extra | Install command | Adds |
 |---|---|---|
-| `units.py` | Sec VI | exact SI constants, `ghz_to_farad`, `ghz_to_henry`, ... |
-| `circuit.py` | Sec I | `Branch`, `Circuit`, incidence matrix |
-| `loops.py` | Sec I.C, App A | `Loops`, `tree_to_G`, `branch_dict_to_G`, `spanning_trees` |
-| `lagrangian.py` | Sec II | `C_b`, `C_int`, `C_int_src`, `Lstar_int`, `omega_J_int`, ... |
-| `modes.py` | Sec III | mode classification, decoupling and truncation, residual freedom `S_1` |
-| `flux.py` | Sec V | irrotational flux assignment `B` |
-| `hamiltonian.py` | Sec IV, VI | `H/h` in GHz |
-| `quantize.py` | | runs the whole chain |
-| `io.py` | | symbolic Hamiltonian save/load and JSON interchange |
+| Drawing | `python -m pip install -e ".[draw]"` | Schemdraw, Matplotlib, SVG/PDF/PNG circuit output |
+| scqubits | `python -m pip install -e ".[scqubits]"` | Direct construction of `scqubits.Circuit` objects |
+| Symbolic optimizer | `python -m pip install -e ".[optimize]"` | Z3 and optimizer support, plus the Singular executable |
+| Tests | `python -m pip install -e ".[test]"` | pytest and the scqubits integration tests |
 
-## Example
+The supplied Conda environment installs the package, every Python extra, and
+the Singular executable:
+
+```bash
+conda env create -f environment.yml
+conda activate circuit_quantization
+pytest -q
+```
+
+## Quick start
+
+The following example constructs a symbolic fluxonium. Capacitance and
+inductance energies are specified in GHz and converted to SI values internally.
+The external flux is supplied as a dimensionless reduced phase.
 
 ```python
 import sympy as sym
 import circuit_quantization as cq
-from circuit_quantization import Branch, Circuit, Loops, quantize
 
-EC, EL, EJ = sym.symbols("E_C E_L E_J", positive=True)
+E_C, E_L, E_J = sym.symbols("E_C E_L E_J", positive=True)
 varphi_ext = sym.Symbol("varphi_ext", real=True)
 
-fluxonium = Circuit([
-    Branch("J", 1, 0, C=cq.ghz_to_farad(EC), EJ=EJ),
-    Branch("L", 1, 0, L=cq.ghz_to_henry(EL)),
+circuit = cq.Circuit([
+    cq.Branch("J", 1, 0, C=cq.ghz_to_farad(E_C), EJ=E_J),
+    cq.Branch("L", 1, 0, L=cq.ghz_to_henry(E_L)),
 ], ground=0)
 
-# One loop, closed by L and named after it: G = [[-1, 1]] in branch order (J, L).
-loops = Loops.from_tree(fluxonium, cq.default_tree(fluxonium), {"L": cq.phase_to_weber(varphi_ext)})
-res = quantize(fluxonium, loops)
-res            # renders H_GHz in a notebook
-res.ham.E_C, res.B # intermediate matrices use their notes names
+loops = cq.Loops.from_branch_dict(
+    circuit,
+    {"f": ("J", "L")},
+    {"f": cq.phase_to_weber(varphi_ext)},
+)
+
+result = cq.quantize(circuit, loops, simplify=True)
+
+assert result.coords.types == ("e",)
+print(result.H)
+# 4*E_C*n_1**2 - E_J*cos(varphi_1)
+# + E_L*varphi_1**2/2 - E_L*varphi_1*varphi_ext
 ```
 
-## Save and load Hamiltonians
-
-Save a quantized Hamiltonian for later Python use or export it to KronFreeCircuits using the version 1 `kronfree-spec` JSON format.
-Loading reconstructs its symbolic coefficients without repeating quantization.
+`result.H` is the symbolic Hamiltonian `H/h` in GHz. A `Result` also exposes
+the circuit, loop basis, Lagrangian matrices, retained coordinates, flux
+assignment, and structured Hamiltonian coefficients:
 
 ```python
-cq.save_spec(res, "fluxonium.json")
-spec = cq.load_spec("fluxonium.json")  # also accepts a dict or JSON text
-H = spec.hamiltonian()               # H/h in GHz
-spec.E_C, spec.E_L, spec.parameters, spec.modes
-
-# Or exchange a JSON-ready dictionary without writing a file:
-data = cq.to_spec(res)
-assert cq.load_spec(data) == spec
+result.coords.Z             # retained coordinates embedded in node space
+result.coords.types         # compact, extended, or harmonic labels
+result.ham.E_C              # charging-energy matrix in GHz
+result.ham.E_L              # inductive-energy matrix in GHz
+result.ham.n_g              # offset charges in Cooper-pair units
+result.B                    # branch-by-loop flux assignment
 ```
 
-The loaded `HamiltonianSpec` contains immutable matrices, cosine terms, and real parameter symbols; it does not restore the full quantization `Result`.
-Parameter names survive, but extra SymPy assumptions such as positivity are not serialized.
-Use the symbols in `spec.parameters` when substituting values into the loaded Hamiltonian.
-Coordinates are real `varphi_1, ...` and `n_1, ...` in mode order.
-Use `mode_names=("theta", "phi", "zeta")` for descriptive labels on a three-mode export; coordinate symbols and sector parameters keep their original naming rules.
-Compact-sector labels use all retained-mode indices (`n_g1`, `n_g3` for types `c, e, c`); rename them explicitly through `subs` when another package uses different names.
+In a notebook, displaying `result` renders the Hamiltonian as LaTeX.
 
-The GHz parametrization in the example keeps the exported coefficients compact.
-For an SI-parametrized circuit, pass `subs={C_J: cq.ghz_to_farad(EC)}` to `to_spec` or `save_spec`, using the original capacitance symbol `C_J`, to express it as an energy before export.
-Unsubstituted parameters keep their original units, while Hamiltonian coefficients remain in GHz.
-If capacitively broken loops should carry no flux, construct the loops with `Loops.from_circuit(circuit, zero_capacitive=True)` before quantization; export preserves any nonzero loop fluxes supplied.
-Unsupported expressions and symbolic or noninteger compact cosine multipliers raise `ValueError` rather than producing an incompatible file.
-Phase-slip terms, extra operators, and noise channels are deferred.
-See [the format specification](docs/spec-format.md) for all fields, validation rules, precision conventions, and a worked junction-offset flux gauge for zero-pi comparisons.
+## Circuits and loops
 
-## Conventions
+Each `Branch` connects two node labels. Node `0` is conventional but not
+special unless it is passed as `ground=0`. A circuit with `ground=None` is
+floating.
 
-`Loops.from_circuit(circuit)` constructs a default `branch_dict` of
-fundamental cycles from a deterministic spanning tree (J/L branches first,
-then C/V, in circuit order). Each loop is named after its closure branch,
-which is listed first. It prints one line per
-loop with signed branches, classification, and assigned flux:
+| Parameter | Units |
+|---|---|
+| Capacitance `C` | farads |
+| Inductance `L` | henries |
+| Junction energy `EJ` | `E_J/h` in GHz |
+| Voltage source `V` | volts |
+| Loop flux | webers |
+| Hamiltonian | `H/h` in GHz |
+
+Branch names can generate their own symbols:
 
 ```python
-loops = Loops.from_circuit(fluxonium)  # L: +L -J [superconducting]; flux = Phi_L
-loops.branch_dict                    # dict[str, dict[str, int]], signed
-loops = Loops.from_branch_dict(fluxonium, {"f": ("J", "L")}, {"f": 0})
+capacitor = cq.Branch("C1", 1, 0)  # C_1
+junction = cq.Branch("J1", 1, 0)   # C_J1 and E_J1
+inductor = cq.Branch("L1", 1, 0)   # L_1
+source = cq.Branch("V1", 2, 0)     # V_1
+
+circuit = cq.Circuit([junction, inductor], ground=0)
+print(circuit.variables)
 ```
 
-Pass `zero_capacitive=True` to default every loop containing a capacitor or
-voltage-source branch to zero flux. For custom fluxes, use
-`Loops.from_branch_dict(circuit, branch_dict, fluxes=...)`. For a custom tree, use
-`Loops.from_tree(circuit, tree, fluxes=...)`.
-Junction capacitance and an inductor's parallel capacitance
-do not break a superconducting loop. The default remains `False`, so setting
-these physical fluxes to zero is an explicit choice.
-
-A static bias may take its own flux assignment (notes `apx:static_split`).
-Pass `B_static` with `static={loop name: flux}` to `quantize`: `B_static` places the static part, `B` places the remainder `Phi_ext - static`, and only `B` enters the EMF drive, so the irrotational condition constrains `B` alone.
-For example, the static half flux can sit on a junction, `cos(x + pi) = -cos x`, while a modulated offset stays on a capacitance-free inductor.
-`res.ham.varphi_b` holds the resulting dimensionless branch offsets.
-
-Tuple entries identify one simple loop; they need not follow traversal order.
-The incidence matrix determines relative signs, with the first listed branch
-fixed to +1. Reordering that first branch can reverse the flux convention.
-Explicit signed dictionaries remain supported for specifying orientations or
-rebasing existing fluxes. An open path or a selection containing multiple
-independent loops is rejected.
-
-Omit branch values to generate symbols and infer the element from its name:
+`Loops.from_circuit` constructs a deterministic fundamental-cycle basis and
+prints a short summary of each loop. Every loop receives a symbolic flux unless
+one is supplied explicitly.
 
 ```python
-capacitor = Branch("C1", 1, 0)  # positive C_1 [F]
-junction = Branch("J1", 1, 0)  # positive C_J1 [F], E_J1 [GHz]
-inductor = Branch("L1", 1, 0)  # positive L_1 [H], no parasitic C
-source = Branch("V1", 2, 0)    # real V_1 [V], either sign allowed
+loops = cq.Loops.from_circuit(circuit)
 
-circuit = Circuit([junction, inductor], ground=0)
-CJ1, EJ1, L1 = circuit.variables
-loops = Loops.from_branch_dict(circuit, {"k": {"J1": 1, "L1": -1}})
-Phi_k, = loops.variables       # real Phi_k [Wb]
+# Set fluxes on capacitively broken cycles to zero by default.
+loops = cq.Loops.from_circuit(circuit, zero_capacitive=True)
+
+# Specify a physical cycle basis and fluxes explicitly.
+loops = cq.Loops.from_branch_dict(
+    circuit,
+    {"f": ("J1", "L1")},
+    {"f": 0},
+)
 ```
 
-Use `Branch("J1", 1, 0, energy_symbols=True)` to generate `E_CJ1` and `E_J1`,
-or the same option on `C1`/`L1` for `E_C1`/`E_L1`. Generated capacitance and
-inductance energies are converted from GHz to SI internally. Explicit values
-always keep their usual units and take precedence over name-based inference.
-An omitted junction capacitance is generated even when `EJ` is supplied;
-explicit `C=0` remains invalid for a junction.
+Tuple entries identify the branches in one simple loop. The incidence matrix
+determines their relative signs. Pass an explicit signed dictionary when the
+orientation must be fixed. `Loops.from_tree` accepts a custom spanning tree,
+and `loops.rebase(...)` changes the cycle basis while transforming the fluxes
+with it.
 
-`Branch.variables`, `Circuit.variables`, and `Loops.variables` are tuples of
-unique free symbols, excluding physical constants and numerical values. Branch
-parameters follow `C, L, EJ, V` order, circuits follow their sorted branch order,
-and loop variables follow loop order. Shared symbols appear once; symbols within
-each explicit expression are sorted. Rebased loops expose the original flux
-symbols appearing in their transformed expressions. Set a loop's flux explicitly
-to zero to omit its symbol.
+## Coordinates and mode transformations
 
-- **Units.** `C` in F, `L` in H, source `V` in V, loop fluxes in Wb, time in s. `EJ` and the Hamiltonian are `E/h` in GHz. Use `phase_to_weber` to pass a dimensionless external phase.
-- **Ordering.** Nodes are ordered internal | ground | source, each group sorted naturally by label (`2 < 10`, `"q2" < "q10"`; ints and strings mix). Branches are ordered capacitor | junction | inductor | source. `res.circuit.branch_names` gives the branch order.
-- **Loops.** `Loops` requires a complete cycle basis whose coefficients are 0 or ±1, so every row is a physical loop. Every cycle carries a visible flux `Phi_<name>` unless you set it explicitly, including capacitively broken cycles, whose flux changes the physics of a time-dependent drive (notes Sec V.E).
-- **Coordinates.** `quantize` builds the mode-separated basis of the notes' Table II automatically. Pass your own square `Z_full` together with `types`; the basis need not be decoupled yet. To explore residual mixing, `res.residual_freedom()` shows the allowed entries of S_1 in `res.coords.types` order, and `res.transform(S)` returns a new result for the same circuit and loops in coordinates `Z S`. Final mode types follow junction and inductor participation, allowing extended and harmonic axes to mix in either direction. For intermediate matrices alone, use `cq.transform(res.lag, res.coords, S)`. `cq.compact_charge_decoupling(res.coords)` gives the S_1 that removes all compact–noncompact charge coupling exactly, keeping the compact periods and the inductive matrix; noncompact columns gain compact components, so a harmonic column becomes extended.
+The automatic basis retains three kinds of dynamical coordinates:
 
-To factor coefficients and combine trigonometric terms in the final Hamiltonian,
-use `quantize(circuit, loops, Z_full, types, simplify=True)` (also works with the
-automatic basis). For an existing expression, use `cq.simplify_hamiltonian(res.H)`.
-This optional step keeps the additive terms separate and can take time for large
-symbolic circuits.
+| Label | Meaning |
+|---|---|
+| `c` | Compact rotor with an integer charge lattice |
+| `e` | Extended coordinate that participates in junction and inductive terms |
+| `h` | Harmonic coordinate with no junction participation |
 
-After truncation, `res.coords.Z` embeds retained coordinates into node space;
-`res.coords.R` extracts them: `R * Z = I` and `R * Z_discarded = 0`.
-It is computed by selecting the retained rows of the full decoupled inverse,
-`R = P * Z_dc.inv()`, keeping the non-dynamical columns during inversion.
-The capacitance identity `R = C_tilde_inv * Z.T * C_int` is an equivalent check. A discarded
-coordinate can acquire a flux-dependent value without shifting the retained
-coordinates. Accordingly, homogeneous flux-gauge shifts satisfy `R * W = 0`.
-The default flux assignment selects `W = 0`.
+Free, frozen, and cyclic coordinates are separated and removed before the
+Hamiltonian is built. Supply both `Z_full` and `types` to `quantize` when a
+specific full basis is required.
 
-`cq.coordinates(lag, Z_full)` takes the full **decoupled** basis and retains it
-as `coords.Z_full`, with all column labels in `coords.types_full`. It infers the
-dynamical columns `coords.Z` and selects the corresponding inverse rows for
-`coords.R`. `cq.mode_types(lag, Z)` classifies either full or retained columns,
-including free, frozen, and cyclic directions. Use `cq.decouple` first when
-the supplied full basis still couples dynamical and non-dynamical sectors.
-Residual transformations update only the retained columns of `Z_full`.
-
-`tests/test_truncation_flux.py` gives an alternating L-C-L-C box with unequal
-elements and time-dependent loop flux. It demonstrates the spurious retained
-shift from `Z.pinv()` and checks extraction, gauge cancellation, and frozen-mode
-elimination against the full node-space energy.
-
-## Symbolic constants
-
-`units.e`, `units.h`, `units.hbar`, and `units.Phi0` are positive symbols;
-`units.phi0 = units.Phi0 / (2*pi)`. Their exact SI values are available as
-`e_num`, `h_num`, `hbar_num`, `Phi0_num`, and `phi0_num` in `units`.
-The named symbols are independent in symbolic algebra; their physical identities
-hold after numerical substitution. Hamiltonians use GHz by default. Converters
-use `units.h_GHz`, the symbolic joules-per-GHz factor (`h_GHz_num = 10^9 * h_num`),
-displayed simply as $h$, so coefficients contain no explicit powers of a billion.
-The SI `units.h` is displayed as $h_{SI}$ to keep the two symbols distinct. `h` and `hbar`
-retain their SI meanings; `subs_constants` also evaluates `h_GHz`.
-Notebook results display $H_{\mathrm{GHz}}$, the numerical energy in GHz;
-plain $h$ on the RHS denotes the joules-per-GHz conversion constant.
+Residual transformations act on retained coordinates as `Z -> Z S1`:
 
 ```python
-cq.subs_constants(res.H)           # exact SI constants, circuit parameters stay symbolic
-cq.subs_constants(res.ham.E_C)     # also works on matrices
-cq.subs_constants(res.H).evalf(6)  # decimal coefficients
+allowed = result.residual_freedom(keep_harmonic=False)
+
+S_charge = cq.compact_charge_decoupling(result.coords)
+charge_decoupled = result.transform(S_charge)
+
+S_modes, _, _ = cq.normal_mode_decoupling(result.lag, result.coords)
+normal_modes = result.transform(S_modes)
 ```
 
-## Spanning trees and loop bases
+`compact_charge_decoupling` removes compact-noncompact charging couplings
+without changing the compact periods. `normal_mode_decoupling` then solves the
+generalized eigenproblem on the noncompact block. Normal modes may mix extended
+and harmonic directions, so the transformed harmonic axes can acquire junction
+participation.
+
+### Numerical coordinate search
+
+`numerical_S1` minimizes a user-selected cost over an invertible
+parameterization of the admissible transformation. The built-in normal-mode
+cost reproduces the analytic generalized-eigenvector construction.
 
 ```python
-for tree in cq.spanning_trees(circuit):
-    candidate = Loops.from_tree(circuit, tree)
-    # Existing physical fluxes must be rebased along with G:
-    rebased = loops.rebase(candidate.G, names=candidate.names)
+pair = cq.Circuit([
+    cq.Branch("J1", 1, 0, C=80e-15, EJ=4.0),
+    cq.Branch("L1", 1, 0, L=300e-9),
+    cq.Branch("J2", 2, 0, C=70e-15, EJ=4.5),
+    cq.Branch("L2", 2, 0, L=250e-9),
+    cq.Branch("Cc", 1, 2, C=10e-15),
+], ground=0)
+
+pair_loops = cq.Loops.from_branch_dict(
+    pair,
+    {
+        "f1": ("J1", "L1"),
+        "f2": ("J2", "L2"),
+        "coupler": ("J1", "Cc", "J2"),
+    },
+    {"f1": 0, "f2": 0, "coupler": 0},
+)
+
+pair_result = cq.quantize(pair, pair_loops)
+S1, search = cq.numerical_S1(
+    pair_result.lag,
+    pair_result.coords,
+    values={},
+    cost=cq.cost_normal_modes,
+    relaxed=True,
+)
+
+assert search.cost < 1e-12
+optimized = pair_result.transform(S1)
 ```
 
-The iterator yields branch-name tuples, keeping parallel branches distinct.
-For disconnected circuits (including an isolated ground), it enumerates spanning
-forests. It exhaustively checks branch subsets, so it is intended for small circuits.
+`cost_targeted` masks selected quadratic couplings. `cost_localization` supplies
+the continuous junction-localization objective. The returned diagnostics contain
+the optimizer result, transformed quadratic forms, and normalized couplings.
 
-A tree determines a fundamental cycle basis once orientations and ordering are
-fixed, but different trees can produce the same cycle matrix. For example, a
-triangle has three spanning trees and just one independent loop. Retaining the
-closure-branch names identifies which tree generated the basis. Arbitrary cycle
-bases need not be fundamental bases of any tree.
+### Symbolic coordinate search
 
-## Choosing S_1 (optional)
-
-`circuit_quantization.optimize` ports sircuitenum's `choose_Z` to the residual
-freedom: it searches S_1 for the coordinates whose junction, inductive, and
-capacitive couplings are sparsest, ranked by sircuitenum's `H_hash`. It needs the
-Singular binary, `z3-solver`, and `func-timeout`; `environment.yml` installs all
-three, and nothing else in the package imports this subpackage.
+The optional `circuit_quantization.optimize` package searches for exact
+transformations that remove selected junction, inductive, and charging
+couplings. It uses Singular for polynomial systems and Z3 to choose small
+integer junction coefficients.
 
 ```python
 from circuit_quantization.optimize import choose_instance, choose_S1
 
-S1s, h_class = choose_S1(res.lag, res.coords)  # S_1 families tied for the best class
-S1, weight = choose_instance(res.lag, res.coords, S1s[0])  # integer instance, minimum junction weight
-best = res.transform(S1)
+families, h_class = choose_S1(result.lag, result.coords)
+S1, weight = choose_instance(result.lag, result.coords, families[0])
+optimized = result.transform(S1)
 ```
 
-`choose_S1` runs seeds, then stages, then a score. Every S_1 is in
-`res.coords.types` column order, and every junction counts as distinct, as in
-sircuitenum, so equal junction energies never cancel a coupling in the ranking.
+This search can be expensive. Install the `optimize` extra and make sure the
+`Singular` executable is available on `PATH`.
 
-- `seeds(lag, coords)` returns starting S_1, each checked as a valid residual
-  transformation; stages and score then use that seed's own mode types. The
-  default `compact_alignments` is sircuitenum's enumeration of compact
-  alignments. With `stages=()` the seeds themselves are ranked, so a seed
-  function can be a complete generator of candidates.
-- `blocks` are the (old type, new type) blocks of S_1 that the first stage opens
-  as free entries after the seed, from `ALLOWED_BLOCKS`; later stages solve among
-  what the previous one left free. The default is sircuitenum's
-  `SIRCUITENUM_BLOCKS`.
-- `stages` set which couplings the solver tries to zero, in sequence. A `Stage`
-  names square matrices, whose upper off-diagonal entries become terms, and
-  rectangular ones (`rows`), whose entries in noncompact columns do. Built-in
-  names are `"J"` (junction matrix), `"L"` (L~*), `"Cinv"` (C~^{-1}), and `"wJ"`
-  (rows of omega_J~^T); a custom entry is `(name, matrix)` or
-  `(name, matrix, law)`, with the matrix in `res.coords.types` column order and
-  law `"flux"` (transforms like L~*) or `"charge"` (like C~^{-1}). Each stage's
-  `order` receives its terms as keys `(name, i, j)` and yields
-  `(cost, term indices)` in non-decreasing cost; the solver keeps every solvable
-  set at the first cost that has one. The defaults are `SIRCUITENUM` and
-  `most_zeros_first`; `by_cost(cost)` builds an order from any `cost(keys)` by
-  visiting all subsets, which suits small stages.
-- `score` ranks the candidates, lowest first. It receives a `Candidate` holding
-  S_1 and the transformed `C_inv`, `L`, and `wJ_T` in (compact, extended,
-  harmonic) order; `candidate.zeros` lists the keys of every stage's terms that
-  vanish. The default `h_hash` is sircuitenum's ranking; its tiebreaker
-  prefilter and caches apply only to it, so a custom score ranks every candidate.
+## Save and load Hamiltonians
 
-The returned S_1 keep their free entries. `choose_instance` finds one family's
-integer instance of minimum junction weight with z3, as sircuitenum does; it is
-meant for families whose junction coefficients come out integer, and
-`max_weight` skips families that cannot beat the best weight so far. `instance`
-sets free entries deterministically to small values that keep S_1 invertible,
-without optimizing. `candidate(lag, coords, S1)` builds the `Candidate` for any
-S_1, for example to score instances.
+The `kronfree-spec` JSON format stores the symbolic Hamiltonian without rerunning
+the circuit reduction:
 
 ```python
-from circuit_quantization.optimize import Stage, by_cost
+cq.save_spec(result, "fluxonium.json")
+spec = cq.load_spec("fluxonium.json")
 
-stages = (Stage(rows=("wJ",), order=by_cost(my_cost)), Stage(square=("L", "Cinv")))
-S1s, best = choose_S1(res.lag, res.coords, stages=stages, score=my_score)
+H = spec.hamiltonian()
+spec.E_C
+spec.E_L
+spec.parameters
+spec.modes
+
+# Work with a JSON-ready dictionary instead of a file.
+data = cq.to_spec(result)
+assert cq.load_spec(data) == spec
 ```
+
+`HamiltonianSpec` stores immutable matrices, cosine terms, mode labels, and real
+parameter symbols. It reconstructs the Hamiltonian but not the full circuit or
+quantization pipeline. See [the format specification](docs/spec-format.md) for
+the schema, validation rules, and compatibility limits.
+
+## Numerical product-state tools
+
+The experimental product-state module evaluates a self-consistent product
+ground state in compact charge bases and noncompact phase-grid bases. It can
+also optimize the residual coordinates by minimizing the product-state energy.
+
+```python
+import numpy as np
+
+ham = cq.NumericHamiltonian(
+    types=("e", "e"),
+    E_C=np.array([[1.0, 0.15], [0.15, 1.0]]),
+    E_L=np.diag([0.5, 0.5]),
+    flux_linear=np.zeros(2),
+    n_g=np.zeros(2),
+    cosines=(
+        (4.0, np.array([1.0, 0.0]), np.pi),
+        (4.0, np.array([0.0, 1.0]), np.pi),
+    ),
+)
+
+state = cq.product_state(ham, max_points=120)
+S1, info = cq.product_state_S1(
+    ham,
+    relaxed=True,
+    regularization=1e-4,
+    max_points=120,
+)
+```
+
+`numeric_hamiltonian` evaluates a serialized `HamiltonianSpec` at numerical
+parameter values. `exact_ground_state`, `infidelity`, and
+`subspace_infidelity` provide small-system references. Product-state
+optimization can be much slower than the quadratic coordinate searches.
 
 ## Circuit diagrams
 
-Install the optional drawing dependencies with `pip install -e ".[draw]"`.
-`draw_circuit_diagram` adapts sircuitenum's Schemdraw renderer to `Circuit`:
+Install the `draw` extra, then render a circuit inline or to a file:
 
 ```python
-cq.draw_circuit_diagram(fluxonium)  # last expression displays inline in Jupyter
-cq.draw_circuit_diagram(fluxonium, "fluxonium.svg")  # also PDF or PNG
+cq.draw_circuit_diagram(circuit)
+cq.draw_circuit_diagram(circuit, "fluxonium.svg")  # SVG, PDF, or PNG
 ```
 
-Layouts are `"planar"` (default, spring fallback), `"spring"`, `"polygon"`, or an
-explicit `{node: (x, y)}` dictionary. Explicit coordinates are multiplied by
-`scale` (default 4). Parallel branches fan out into separate lanes; `spread`
-controls their spacing. Use `label=False` to hide branch names or
-`node_labels=False` to hide node labels. `label_loc={node: "left"}` changes a
-node label's position. Automatic layouts may need adjustment for crowded graphs.
-
-Add flux annotations with `flux_labels={r"$\odot\,\Phi_k$": (x, y)}`.
-Positions use the same units as an explicit layout and are multiplied by `scale`.
-Labels support Matplotlib mathtext; they annotate the display without changing
-`Loops` or inferring flux orientation from the layout.
-
-Ground receives a ground symbol, including an isolated reference ground in a
-floating circuit. Voltage-source polarity is positive at the source node,
-independent of branch orientation. A boxed junction includes its intrinsic
-capacitance; an inductor's nonzero capacitance is displayed in parallel, without
-adding a branch to the circuit model. The returned Schemdraw `Drawing` supports
-inline notebook rendering and further customization; no LaTeX installation is needed.
+The default layout is planar with a spring-layout fallback. Pass `layout` as
+`"spring"`, `"polygon"`, or an explicit `{node: (x, y)}` dictionary. Parallel
+branches are drawn in separate lanes. Flux labels can be added with
+`flux_labels={label: (x, y)}`.
 
 ## scqubits export
 
-Install `pip install '.[scqubits]'`. The exporter adapts
-`sircuitenum.qpackage_interface.to_SCqubits` to this package's `Circuit`:
+`scqubits_yaml` generates a scqubits circuit description without importing
+scqubits. `to_scqubits` requires the `scqubits` extra and constructs the object
+directly.
 
 ```python
-parameters = {EC: 0.3, EJ: 8, EL: 0.5}
-yaml = cq.scqubits_yaml(fluxonium, subs=parameters)
+parameters = {E_C: 0.3, E_J: 8.0, E_L: 0.5}
+
+yaml = cq.scqubits_yaml(circuit, subs=parameters)
 sc = cq.to_scqubits(
-    fluxonium, subs=parameters, closure_branches=["L"],
-    ext_basis="harmonic", cutoff=40,
+    circuit,
+    subs=parameters,
+    closure_branches=["L"],
+    ext_basis="harmonic",
+    cutoff=40,
 )
-sc.Φ1 = 0.5  # flux in units of Phi0, in scqubits' closure-loop convention
+
+sc.Φ1 = 0.5
 sc.eigenvals(5)
 ```
 
-`scqubits_yaml` needs no scqubits installation. Both functions convert SI
-capacitances and inductances to GHz and evaluate physical constants. Supply
-`subs` for remaining symbols, including when requesting `symbolic=True`
-(a `scqubits.SymbolicCircuit`). Exported parameters are named `EJ_i`, `EC_i`,
-and `EL_i`, using the zero-based index in `circuit.branches`; each starts with
-the supplied numerical value. Junction capacitance stays in `JJ`; inductor
-capacitance becomes a separate parallel `C`. Voltage sources are unsupported
-and raise an error.
+The exporter converts SI capacitances and inductances to GHz. Voltage sources
+are not supported. Loop fluxes and offset charges are not copied from a
+`Result`; set them on the returned scqubits object using scqubits conventions.
 
-Ground maps to node 0. By default, `circuit.internal_nodes` maps to nodes
-1, 2, …; pass `node_order` to change that order. A supplied
-`transformation_matrix` must have its rows in that same order. This supports
-the named node order and transformation used in the double-Harmonium notebooks.
-`closure_branches` takes original branch names in external-flux order.
-The exporter does not transfer `Loops`, flux values, or offset charges: assign
-these on the returned object in scqubits' convention. Its default loop handling
-excludes capacitive loops; `use_dynamic_flux_grouping=True` includes them.
-See [scqubits configuration](https://scqubits.readthedocs.io/en/latest/api-doc/_autosummary/scqubits.core.circuit.Circuit.html)
-for transformation and closure-branch conventions.
+## Important conventions
 
-`cutoff` accepts a scalar or a dictionary keyed by scqubits' 1-based mode indices.
-`trunc_num` optionally enables one subsystem per dynamical mode, with a scalar
-or a list of truncation dimensions. Other keyword arguments go to the scqubits
-constructor; further configuration is available on the returned object.
+- Nodes are ordered as internal, ground, then source nodes. Each group uses
+  natural sorting, so `2 < 10` and `"q2" < "q10"`.
+- Branches are ordered as capacitors, junctions, inductors, then voltage
+  sources. `circuit.branch_names` gives the final order.
+- Compact phases are `2*pi` periodic and their conjugate charges are integers.
+  A residual transformation must preserve this lattice.
+- Every physical loop has a visible flux unless it is set explicitly to zero.
+  Capacitively broken loops can matter for time-dependent drives.
+- `coords.Z` embeds retained coordinates into node space. `coords.R` extracts
+  retained coordinates and satisfies `R * Z = I`.
+- `subs_constants` replaces the package's exact physical-constant symbols by
+  their SI values. Circuit parameters remain symbolic.
+
+## Package map
+
+| Module | Purpose |
+|---|---|
+| `circuit.py` | Branch and circuit definitions, node and branch ordering |
+| `loops.py` | Cycle bases, spanning trees, loop fluxes, and rebasing |
+| `lagrangian.py` | Capacitance, inductive, incidence, and source matrices |
+| `modes.py` | Mode classification, truncation, residual freedom, and analytic decoupling |
+| `numerical.py` | Invertible numerical parameterizations and coordinate costs |
+| `product_state.py` | Product-state solvers, exact references, and coordinate optimization |
+| `flux.py` | Irrotational and user-controlled flux assignments |
+| `hamiltonian.py` | Symbolic Hamiltonian construction and simplification |
+| `quantize.py` | End-to-end quantization and the `Result` interface |
+| `io.py` | `kronfree-spec` JSON serialization |
+| `draw.py` | Schemdraw circuit diagrams |
+| `qpackage_interface.py` | scqubits YAML and object export |
+| `optimize/` | Optional exact symbolic search with Singular and Z3 |
+
+## Examples
+
+The `examples/` directory contains complete workflows:
+
+- `harmonium.ipynb`, `zero_pi.ipynb`, `kite.ipynb`, and `rhombus.ipynb` build
+  representative superconducting circuits.
+- `lclc_box.ipynb` demonstrates a circuit with nondynamical coordinates.
+- `drawing.ipynb` shows diagram layouts and annotations.
+- `double_harmonium.ipynb` and `double_harmonium_symmetry.ipynb` explore a
+  coupled multimode circuit and its symmetries.
+- `product_state_demo.py` compares reference, normal-mode, and optimized
+  product-state coordinates.
+- `hierarchical_kite.py` compares truncated hierarchical bases for the KITE.
+
+The numerical product-state scripts perform large eigensolves and can take
+substantially longer than the notebooks.
 
 ## Development
 
+Run the complete test suite from the repository root:
+
 ```bash
-conda env create -f environment.yml   # pinned sympy and scqubits, plus the optimizer's Singular and z3
-conda run -n circuit_quantization python -m pytest -q
-conda run -n circuit_quantization python tools/eqrefs.py path/to/full_matrix_quantization.tex
+pytest -q
 ```
 
-The tests reproduce the worked examples of the notes' Appendix B and the examples in the body.
-`examples/` has one notebook per Appendix B circuit.
+Run one area while developing:
 
-`tests/test_sircuitenum_regressions.py` ports quantization regression cases from
-`sircuitenum/tests/test_quantize.py`, without requiring sircuitenum at runtime.
-It covers mode counts, formerly singular bases, serial decoupling, and agreement
-between automatic and explicit quantization. Topologies run with both distinct
-and equal element values. The original floating circuits have no ground
-(`ground=None`), and the original `sigma` mode maps to `cy`.
+```bash
+pytest tests/test_modes.py -q
+pytest tests/test_numerical.py -q
+pytest tests/test_product_state.py -q
+pytest tests/optimize -q
+```
 
-`tests/optimize/` ports sircuitenum's solver tests (`test_rational_check`,
-`test_equationset`, `test_singular_interface`, `test_z3_interface`) and the
-`test_quantize` cases for the vendored functions. `test_choose_Z` becomes
-`test_choose_S1_reproduces_choose_Z`, which runs sircuitenum's circuits through
-this package and checks its `H_hash` classes. Inputs that came from sircuitenum's
-own circuit builders are stored in `tests/optimize/sircuitenum_fixtures.json`
-(regenerate with `make_sircuitenum_fixtures.py` where sircuitenum is installed).
-The directory is skipped when the optional dependencies are missing.
+The optimizer tests are skipped automatically when their optional dependencies
+are unavailable. The project is licensed under GPL-3.0-only.
