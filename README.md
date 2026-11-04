@@ -389,8 +389,6 @@ The `examples/` directory contains complete workflows:
   representative superconducting circuits.
 - `lclc_box.ipynb` demonstrates a circuit with nondynamical coordinates.
 - `drawing.ipynb` shows diagram layouts and annotations.
-- `double_harmonium.ipynb` and `double_harmonium_symmetry.ipynb` explore a
-  coupled multimode circuit and its symmetries.
 - `product_state_demo.py` compares reference, normal-mode, and optimized
   product-state coordinates.
 - `hierarchical_kite.py` compares truncated hierarchical bases for the KITE.
