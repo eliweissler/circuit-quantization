@@ -376,7 +376,7 @@ are not supported. Loop fluxes and offset charges are not copied from a
 | `flux.py` | Irrotational and user-controlled flux assignments |
 | `hamiltonian.py` | Symbolic Hamiltonian construction and simplification |
 | `quantize.py` | End-to-end quantization and the `Result` interface |
-| `io.py` | `kronfree-spec` JSON serialization |
+| `io.py` | JSON serialization |
 | `draw.py` | Schemdraw circuit diagrams |
 | `qpackage_interface.py` | scqubits YAML and object export |
 | `optimize/` | Optional exact symbolic search with Singular and Z3 |
