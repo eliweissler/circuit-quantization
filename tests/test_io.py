@@ -537,3 +537,49 @@ def test_numeric_export_repairs_roundoff_without_loosening_loader():
     matrix[0, 1] = 0.1
     with pytest.raises(ValueError, match="asymmetry.*0,1"):
         cq.to_spec(replace(res, ham=replace(res.ham, E_L=sym.ImmutableMatrix(matrix))))
+
+
+@pytest.mark.parametrize("factory", [harmonium, zero_pi, zero_pi_asymmetric, fluxonium_pair,
+                                      transmon_fluxonium, kite, rhombus, coupled, coupled_zero_pis])
+def test_rebuildable_record_round_trip(factory, tmp_path):
+    circuit = factory()
+    if factory in (coupled, coupled_zero_pis):
+        scale = sym.Symbol("E_cap", positive=True)
+        capacitances = sorted({s for b in circuit.branches for s in b.C.free_symbols}, key=str)
+        values = {s: cq.ghz_to_farad(scale * sym.Rational(i + 2, 10)) for i, s in enumerate(capacitances)}
+        circuit = cq.Circuit([replace(b, C=b.C.subs(values)) for b in circuit.branches], ground=circuit.ground)
+    basis = {"Z_full": COUPLED_ZERO_PI_Z, "types": COUPLED_ZERO_PI_TYPES} if factory is coupled_zero_pis else {}
+    result = cq.quantize(circuit, cq.Loops.from_tree(circuit, cq.default_tree(circuit)), **basis)
+    path = tmp_path / 'record.json'
+    data = cq.to_record(result, path)
+    rebuilt = cq.load_record(path)
+    assert cq.to_spec(rebuilt) == cq.to_spec(result)
+    assert rebuilt.circuit == result.circuit
+    assert rebuilt.loops == result.loops
+    data['unknown'] = 1
+    with pytest.raises(ValueError, match='unknown'):
+        cq.load_record(data)
+
+
+def test_record_numeric_values_frame_and_hostile_metadata(tmp_path):
+    result = fluxonium().transform(sym.Matrix([[2]]))
+    values = {s: sym.Rational(1, 3) for s in result.H.free_symbols
+              if s.name in {'E_C', 'E_L', 'E_J', 'varphi_ext'}}
+    data = cq.to_record(result, subs=values)
+    rebuilt = cq.load_record(json.dumps(data))
+    assert cq.to_spec(rebuilt) == cq.to_spec(result, subs=values)
+    assert rebuilt.residual_S == result.residual_S
+    data['_frame']['Z_full']['entries'][0] = "__import__('os').system('false')"
+    with pytest.raises(ValueError):
+        cq.load_record(data)
+
+
+def test_record_separate_static_flux_assignment():
+    result = fluxonium()
+    static = sym.ImmutableMatrix([cq.phase_to_weber(sym.Rational(1, 5))])
+    result = cq.quantize(result.circuit, result.loops, B=result.B, B_static=result.B,
+                         static=dict(zip(result.loops.names, static)))
+    rebuilt = cq.load_record(cq.to_record(result))
+    assert rebuilt.B_static == result.B_static
+    assert rebuilt.static == result.static
+    assert cq.to_spec(rebuilt) == cq.to_spec(result)

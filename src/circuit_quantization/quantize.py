@@ -24,6 +24,8 @@ class Result:
     B_static: sym.ImmutableMatrix | None = None  # assignment of the static bias, eq:particular_static_split
     static: sym.ImmutableMatrix | None = None  # static loop fluxes [Wb], loops order
 
+    residual_S: sym.ImmutableMatrix | None = None  # cumulative retained frame change
+
     @property
     def H(self):
         return self.ham.H
@@ -46,8 +48,12 @@ class Result:
         :returns: New Result with the same B and static assignment; the original is unchanged.
         :raises ValueError: Disallowed mixing or an invalid transformation.
         """
-        return _result(self.circuit, self.loops, self.lag, transform(self.lag, self.coords, S1), simplify,
-                       B=self.B, B_static=self.B_static, static=self.static, check_assignment=False)
+        from .modes import _check_residual
+        S = _check_residual(self.coords.types, sym.ImmutableMatrix(S1))
+        result = _result(self.circuit, self.loops, self.lag, transform(self.lag, self.coords, S), simplify,
+                         B=self.B, B_static=self.B_static, static=self.static, check_assignment=False)
+        cumulative = S if self.residual_S is None else self.residual_S * S
+        return replace(result, residual_S=sym.ImmutableMatrix(cumulative))
 
     def _repr_latex_(self):
         counts = ", ".join(f"{t}: {k}" for t, k in Counter(self.coords.types).items())

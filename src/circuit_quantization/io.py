@@ -304,16 +304,7 @@ def _unique_object(pairs):
     return result
 
 
-def load_spec(source) -> HamiltonianSpec:
-    """Read and validate a Hamiltonian dictionary, JSON string, or file path.
-
-    :param source: JSON-ready dict, JSON text, or str/PathLike file path.
-        Strings beginning with a JSON value delimiter are treated as JSON;
-        use pathlib.Path for a filename that would otherwise be ambiguous.
-    :returns: Immutable HamiltonianSpec, independent of the input dictionary.
-    :raises ValueError: Invalid format, expression, or unsupported feature.
-    :raises OSError: A source file cannot be read.
-    """
+def _read_document(source):
     if isinstance(source, PathLike):
         source = Path(source).read_text(encoding="utf-8")
     elif isinstance(source, str) and source.strip() and source.lstrip()[0] not in '{["-0123456789' and source.strip() not in ("null", "true", "false"):
@@ -324,6 +315,20 @@ def load_spec(source) -> HamiltonianSpec:
                                 parse_constant=lambda value: _fail("JSON", f"nonfinite number {value}"))
         except json.JSONDecodeError as error:
             _fail("JSON", str(error))
+    return source
+
+
+def load_spec(source) -> HamiltonianSpec:
+    """Read and validate a Hamiltonian dictionary, JSON string, or file path.
+
+    :param source: JSON-ready dict, JSON text, or str/PathLike file path.
+        Strings beginning with a JSON value delimiter are treated as JSON;
+        use pathlib.Path for a filename that would otherwise be ambiguous.
+    :returns: Immutable HamiltonianSpec, independent of the input dictionary.
+    :raises ValueError: Invalid format, expression, or unsupported feature.
+    :raises OSError: A source file cannot be read.
+    """
+    source = _read_document(source)
     required = {"format", "version", "parameters", "modes", "E_C", "E_L", "flux_linear", "n_g", "cosines"}
     _object(source, required, {"units", "constant", "charge_cosines"}, "document")
     if source["format"] != "kronfree-spec":
@@ -508,3 +513,130 @@ def save_spec(res, path, **kwargs) -> dict:
     text = json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
     Path(path).write_text(text, encoding="utf-8")
     return data
+
+
+def to_record(res, path=None, *, subs=None, **kwargs):
+    """Export a rebuildable Result alongside its ordinary kronfree-spec fields.
+
+    Optional ``subs`` records numeric parameter values. If ``path`` is given,
+    write JSON there; always return the dictionary. Expressions use the same
+    restricted grammar as the spec. Nodes must be JSON scalars or tuples of
+    JSON scalars; arbitrary Python objects and undefined functions are unsupported.
+    """
+    import subprocess
+
+    data = to_spec(res, subs=subs, **kwargs)
+    symbols = {}
+
+    def expression(value):
+        if value is None:
+            return None
+        value = sym.sympify(value)
+        for symbol in sorted(value.free_symbols, key=sym.default_sort_key):
+            if symbol not in symbols:
+                symbols[symbol] = sym.Symbol(f"p{len(symbols)}")
+        text = _SpecPrinter().doprint(value.xreplace(symbols))
+        _expression(text, {p.name: s for s, p in symbols.items()}, "record expression")
+        return text
+
+    def matrix(value):
+        if value is None:
+            return None
+        return {"rows": value.rows, "cols": value.cols, "entries": [expression(x) for x in value]}
+
+    def node(value):
+        if value is None or type(value) in (str, int, bool):
+            return value
+        if isinstance(value, tuple):
+            return {"tuple": [node(x) for x in value]}
+        raise ValueError(f"unsupported record node {value!r}")
+
+    branches = [{"name": b.name, "tail": node(b.tail), "head": node(b.head),
+                 **{key: expression(getattr(b, key)) for key in ("C", "L", "EJ", "V")}}
+                for b in res.circuit.branches]
+    data["_circuit"] = {
+        "branches": branches, "ground": node(res.circuit.ground), "t": expression(res.circuit.t),
+        "loops": {"G": matrix(res.loops.G), "names": list(res.loops.names),
+                  "closure_branches": res.loops.closure_branches, "Phi_ext": matrix(res.loops.Phi_ext)},
+        "B": matrix(res.B), "B_static": matrix(res.B_static), "static": matrix(res.static),
+    }
+    data["_frame"] = {"Z_full": matrix(res.coords.Z_full), "types_full": list(res.coords.types_full),
+                      "S": matrix(res.residual_S)}
+    data["_values"] = [{"symbol": expression(key), "value": expression(value)}
+                       for key, value in (subs or {}).items()]
+    data["_circuit"]["symbols"] = [
+        {"id": placeholder.name, "name": symbol.name,
+         "assumptions": dict(symbol._assumptions_orig)} for symbol, placeholder in symbols.items()]
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[2],
+                                capture_output=True, text=True, check=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        commit = None
+    if commit:
+        data["_generator"]["git_commit"] = commit
+    if path is not None:
+        Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
+    return data
+
+
+def load_record(source):
+    """Rebuild a Result from to_record output, without evaluating loaded code.
+
+    Spec fields are validated first, including rejection of unknown nonmetadata
+    keys. Circuit/frame metadata are then checked through the quantization API.
+    Recorded substitutions are reapplied after rebuilding the symbolic circuit.
+    """
+    from dataclasses import replace
+    from .circuit import Branch, Circuit
+    from .loops import Loops
+    from .quantize import numerify, quantize
+
+    data = _read_document(source)
+    load_spec(data)
+    try:
+        circuit_data, frame = data["_circuit"], data["_frame"]
+        symbols = {}
+        for item in circuit_data["symbols"]:
+            _name(item["id"], "record symbol id")
+            if item["id"] in symbols:
+                _fail("record symbols", "duplicate symbol id")
+            if not isinstance(item["name"], str) or not isinstance(item["assumptions"], dict):
+                _fail("record symbols", "invalid name or assumptions")
+            if any(type(v) is not bool for v in item["assumptions"].values()):
+                _fail("record symbols", "assumptions must be booleans")
+            symbols[item["id"]] = sym.Symbol(item["name"], **item["assumptions"])
+
+        def expression(text):
+            return None if text is None else _expression(text, symbols, "record expression")
+
+        def matrix(value):
+            if value is None:
+                return None
+            rows, cols = value["rows"], value["cols"]
+            if type(rows) is not int or type(cols) is not int or min(rows, cols) < 0:
+                _fail("record matrix", "invalid dimensions")
+            return sym.ImmutableMatrix(rows, cols, [expression(x) for x in value["entries"]])
+
+        def node(value):
+            if value is None or type(value) in (str, int, bool):
+                return value
+            if isinstance(value, dict) and set(value) == {"tuple"}:
+                return tuple(node(x) for x in value["tuple"])
+            _fail("record node", "invalid node label")
+
+        branches = [Branch(b["name"], node(b["tail"]), node(b["head"]),
+                           **{key: expression(b[key]) for key in ("C", "L", "EJ", "V")})
+                    for b in circuit_data["branches"]]
+        circuit = Circuit(branches, ground=node(circuit_data["ground"]), t=expression(circuit_data["t"]))
+        loops_data = circuit_data["loops"]
+        loops = Loops(circuit, matrix(loops_data["G"]), loops_data["names"], loops_data["closure_branches"],
+                      dict(zip(loops_data["names"], matrix(loops_data["Phi_ext"]))))
+        static = matrix(circuit_data["static"])
+        result = quantize(circuit, loops, matrix(frame["Z_full"]), tuple(frame["types_full"]),
+                          B=matrix(circuit_data["B"]), B_static=matrix(circuit_data["B_static"]),
+                          static=None if static is None else dict(zip(loops.names, static)))
+        result = replace(result, residual_S=matrix(frame["S"]))
+        values = {expression(item["symbol"]): expression(item["value"]) for item in data.get("_values", [])}
+        return numerify(result, values) if values else result
+    except (KeyError, TypeError, IndexError) as error:
+        _fail("record", f"malformed metadata: {error}")

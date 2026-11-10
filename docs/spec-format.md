@@ -233,3 +233,17 @@ its fresh `n_g{j}` labels the returned compact `n_g_sector` values. Applying
 unchanged sector values to a nonidentity compact block describes a different
 sector. Manual NumericHamiltonian construction treats compact offsets as
 sector charges by default; pass both parts explicitly for source-driven models.
+
+`cq.to_record(result, path=None, subs=None)` returns an ordinary kronfree-spec
+plus `_circuit`, `_frame`, `_values`, and `_generator` metadata, and optionally
+writes it to a JSON file. `cq.load_record(dict_or_json_or_path)` rebuilds a Result.
+The circuit metadata preserves branch values and symbol assumptions, node labels,
+loop basis and external fluxes, and dynamic/static flux assignments. The frame
+stores the current full Z, its types, and the cumulative residual S when applied.
+Parameter substitutions supplied to the writer are stored and reapplied on load.
+The generator includes the package version and git commit when available.
+All expressions use the existing restricted grammar; no Python source evaluation
+is performed. Unsupported functions and arbitrary Python node objects raise an
+error. Rebuildable records should be made from a symbolic Result with numeric
+values passed as `subs`; substitutions previously applied by `numerify` cannot
+be recovered from that object's original circuit metadata.
