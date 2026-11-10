@@ -34,6 +34,7 @@ from scipy.linalg import eigh
 from scipy.optimize import OptimizeResult, minimize
 
 from .numerical import cost_normal_modes, parameterization
+from .modes import _S1b
 
 # Eighth-order central stencils for d/dphi and d^2/dphi^2 (interior points).
 _D1 = np.array([1 / 280, -4 / 105, 1 / 5, -4 / 5, 0.0, 4 / 5, -1 / 5, 4 / 105, -1 / 280])
@@ -51,6 +52,8 @@ class NumericHamiltonian:
     n_g: np.ndarray
     cosines: tuple  # of (energy, omega, offset)
     constant: float = 0.0
+    n_g_source: np.ndarray | None = None
+    n_g_sector: np.ndarray | None = None
 
     def __post_init__(self):
         N = len(self.types)
@@ -65,27 +68,96 @@ class NumericHamiltonian:
         object.__setattr__(self, "types", tuple(self.types))
         object.__setattr__(self, "cosines", cosines)
         object.__setattr__(self, "constant", float(self.constant))
+        compact = np.array([t == "c" for t in self.types])
+        sector = np.where(compact, n_g, 0.0) if self.n_g_sector is None else np.asarray(self.n_g_sector, dtype=float).reshape(N)
+        source = n_g - sector if self.n_g_source is None else np.asarray(self.n_g_source, dtype=float).reshape(N)
+        if np.any(sector[~compact]) or not np.allclose(source + sector, n_g, rtol=1e-12, atol=1e-14):
+            raise ValueError("source and compact sector offsets must sum to n_g")
+        object.__setattr__(self, "n_g_source", source)
+        object.__setattr__(self, "n_g_sector", sector)
 
     @property
     def size(self):
         return len(self.types)
 
     def transformed(self, S):
-        """The coefficients in the coordinates ``phi'`` with ``phi = S phi'``."""
-        S = np.asarray(S, dtype=float)
-        S_inv = np.linalg.inv(S)
+        """Checked numeric frame change, ``phi = S phi'`` (no symbolic work).
+
+        Compact entries within 1e-12 of integers are snapped; the compact
+        block must be unimodular. Source offsets transform on every mode;
+        static sector offsets transform only within the compact block.
+        Junction participation reclassifies extended/harmonic columns.
+        """
+        S = np.array(S, dtype=float, copy=True)
+        if S.shape != (self.size, self.size) or not np.isfinite(S).all():
+            raise ValueError("S1 must be finite, square, and match the retained modes")
+        compact = [i for i, t in enumerate(self.types) if t == "c"]
+        for i in range(self.size):
+            for j in range(self.size):
+                if i in compact and j in compact:
+                    nearest = round(S[i, j])
+                    if abs(S[i, j] - nearest) > 1e-12:
+                        raise ValueError(f"S_cc entry S1[{i}, {j}] = {S[i,j]} must be an integer")
+                    S[i, j] = nearest
+                if S[i, j] != 0 and (self.types[i], self.types[j]) not in _S1b:
+                    raise ValueError(f"S1[{i}, {j}] = {S[i,j]} mixes {self.types[i]!r} into {self.types[j]!r}")
+        if compact and abs(_integer_det([[int(S[i,j]) for j in compact] for i in compact])) != 1:
+            raise ValueError("S_cc must lie in GL(N_c, Z)")
+        try:
+            S_inv = np.linalg.inv(S)
+        except np.linalg.LinAlgError as error:
+            raise ValueError("S1 must be invertible") from error
+        cosines = tuple((E, S.T @ w, d) for E, w, d in self.cosines)
+        E_L = S.T @ self.E_L @ S
+        # Retained columns remain dynamical; compact directions are invariant.
+        types = tuple("c" if i in compact else
+                      "e" if any(w[i] != 0 for _, w, _ in cosines) else "h"
+                      for i in range(self.size))
+        source = S.T @ self.n_g_source
+        sector = np.zeros(self.size)
+        sector[compact] = S[np.ix_(compact, compact)].T @ self.n_g_sector[compact]
         return replace(
-            self,
+            self, types=types,
             E_C=S_inv @ self.E_C @ S_inv.T,
-            E_L=S.T @ self.E_L @ S,
+            E_L=E_L,
             flux_linear=S.T @ self.flux_linear,
-            n_g=S.T @ self.n_g,
-            cosines=tuple((E, S.T @ w, d) for E, w, d in self.cosines),
+            n_g=source + sector, n_g_source=source, n_g_sector=sector,
+            cosines=cosines,
         )
 
 
-def numeric_hamiltonian(spec, values):
-    """Evaluate a ``HamiltonianSpec`` at parameter ``values`` (symbols or names)."""
+def _integer_det(rows):
+    """Exact Bareiss determinant of the small compact integer block."""
+    rows = [row[:] for row in rows]
+    sign, previous = 1, 1
+    for k in range(len(rows) - 1):
+        pivot = next((i for i in range(k, len(rows)) if rows[i][k]), None)
+        if pivot is None:
+            return 0
+        if pivot != k:
+            rows[k], rows[pivot] = rows[pivot], rows[k]
+            sign = -sign
+        value = rows[k][k]
+        for i in range(k + 1, len(rows)):
+            for j in range(k + 1, len(rows)):
+                rows[i][j] = (rows[i][j] * value - rows[i][k] * rows[k][j]) // previous
+        previous = value
+    return sign * rows[-1][-1]
+
+
+def numeric_hamiltonian(spec, values=None):
+    """Evaluate a Result or HamiltonianSpec at values keyed by symbols or names.
+
+    Evaluation is paid once. Subsequent ``transformed(S)`` calls use NumPy
+    only. Compact ``n_g{j}`` parameters are static sector labels; all remaining
+    offset charge is the source contribution. To compare to Result.transform,
+    assign its fresh compact labels the returned ``n_g_sector`` values.
+    """
+    from .quantize import Result
+    from .io import load_spec, to_spec
+    if isinstance(spec, Result):
+        spec = load_spec(to_spec(spec))
+    values = {} if values is None else values
     by_name = {s.name: s for s in spec.parameters}
     subs = {}
     for key, value in values.items():
@@ -101,7 +173,13 @@ def numeric_hamiltonian(spec, values):
     def array(M):
         return np.array([[scalar(x) for x in row] for row in sym.Matrix(M).tolist()])
 
+    sector_symbols = {p for j, (_, kind) in enumerate(spec.modes)
+                      if kind == "c" for p in spec.parameters if p.name == f"n_g{j + 1}"}
+    source_expr = spec.n_g.subs(dict.fromkeys(sector_symbols, 0))
+    source = array(source_expr).reshape(-1)
+    sector = array(spec.n_g - source_expr).reshape(-1)
     return NumericHamiltonian(
+        n_g_source=source, n_g_sector=sector,
         types=tuple(kind for _, kind in spec.modes),
         E_C=array(spec.E_C),
         E_L=array(spec.E_L),

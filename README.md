@@ -421,3 +421,15 @@ asymmetric pair differs by at most 1e-10 times the largest matrix entry.
 Floating off-diagonal pairs below 1e-15 times that scale print as exact zero.
 Larger asymmetries report the pair; symbolic matrices and loader validation
 keep their existing rules.
+
+Use `cq.numeric_hamiltonian(result_or_spec, values)` once to evaluate a Result
+or HamiltonianSpec. `ham.transformed(S)` then checks the residual blocks and
+compact lattice using numeric operations, updates mode types from junction
+participation, and returns the new coefficients. It retains voltage-source
+and compact-sector offsets separately as `n_g_source` and `n_g_sector`.
+Only the compact block transforms static sector charges; noncompact modes
+receive source offsets only. For comparison with `Result.transform(S)`, assign
+its fresh `n_g{j}` labels the returned compact `n_g_sector` values. Applying
+unchanged sector values to a nonidentity compact block describes a different
+sector. Manual NumericHamiltonian construction treats compact offsets as
+sector charges by default; pass both parts explicitly for source-driven models.

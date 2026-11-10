@@ -156,3 +156,82 @@ def test_numeric_hamiltonian_from_quantized_circuit():
     assert state.converged
     S, info = product_state_S1(ham, relaxed=True)
     assert info.energy <= state.energy + 1e-6
+
+
+@pytest.mark.parametrize("factory_name", ["kite", "coupled_zero_pis"])
+def test_numeric_frame_matches_symbolic_with_sector_shear(factory_name):
+    import circuits
+    circuit = getattr(circuits, factory_name)()
+    loops = cq.Loops.from_tree(circuit, cq.default_tree(circuit),
+                               {name: 0 for name in cq.Loops.from_tree(circuit, cq.default_tree(circuit)).names})
+    res = cq.quantize(circuit, loops)
+    spec = cq.load_spec(cq.to_spec(res))
+    values = {p.name: (0.23 if p.name.startswith("n_g") else
+                      1e-15 if p.name.startswith("C") else
+                      1e-8 if p.name.startswith("L") else 2.0) for p in spec.parameters}
+    numeric = numeric_hamiltonian(res, values)
+    S = np.eye(numeric.size)
+    compact = [i for i, t in enumerate(numeric.types) if t == "c"]
+    noncompact = [i for i, t in enumerate(numeric.types) if t != "c"]
+    S[compact[0], noncompact[-1]] = 0.25
+    if len(compact) > 1:
+        S[compact[0], compact[1]] = 1
+    actual = numeric.transformed(S)
+    transformed = res.transform(S)
+    new_values = dict(values)
+    for i in compact:
+        new_values[f"n_g{i+1}"] = actual.n_g_sector[i]
+    expected = numeric_hamiltonian(transformed, new_values)
+    assert actual.types == expected.types
+    for name in ("E_C", "E_L", "flux_linear", "n_g", "n_g_source", "n_g_sector"):
+        np.testing.assert_allclose(getattr(actual, name), getattr(expected, name), rtol=1e-10, atol=1e-12)
+    for (E, w, d), (EE, ww, dd) in zip(actual.cosines, expected.cosines):
+        np.testing.assert_allclose([E, d], [EE, dd], rtol=1e-10, atol=1e-12)
+        np.testing.assert_allclose(w, ww, rtol=1e-10, atol=1e-12)
+    assert np.all(actual.n_g_sector[noncompact] == 0)
+    S[noncompact[0], compact[0]] = 0.1
+    with pytest.raises(ValueError, match="S1"):
+        numeric.transformed(S)
+    with pytest.raises(ValueError, match="S1"):
+        res.transform(S)
+
+
+def test_source_and_sector_offsets_remain_separate_across_frames():
+    ham = NumericHamiltonian(("c", "h"), np.eye(2), np.diag([0, 1]), [0, 0],
+                             [0.5, 0.2], ((1, [1, 0], 0),),
+                             n_g_source=np.array([0.1, 0.2]), n_g_sector=np.array([0.4, 0]))
+    S = np.array([[-1, 0.5], [0, 1.]])
+    transformed = ham.transformed(S)
+    assert transformed.types == ("c", "e")
+    np.testing.assert_allclose(transformed.n_g, [-0.5, 0.25])
+    restored = transformed.transformed(np.linalg.inv(S))
+    assert restored.types == ham.types
+    np.testing.assert_allclose(restored.n_g, ham.n_g)
+
+
+@pytest.mark.parametrize("S", [[[1, 0], [1, 1]], [[0.5, 0], [0, 1]],
+                              [[2, 0], [0, 1]], [[1, 0], [0, 0]], [[np.nan, 0], [0, 1]]])
+def test_numeric_frame_rejects_invalid_transformations(S):
+    with pytest.raises(ValueError):
+        transmon_fluxonium().transformed(S)
+
+
+def test_numeric_source_offset_matches_symbolic_drive_after_shear():
+    voltage = sym.Symbol('V_drive', real=True)
+    circuit = Circuit([Branch('J1', 1, 0, C=cq.ghz_to_farad(1), EJ=3),
+                       Branch('C1', 2, 0, C=cq.ghz_to_farad(2)),
+                       Branch('L1', 2, 0, L=cq.ghz_to_henry(1)),
+                       Branch('CV', 1, 3, C=cq.ghz_to_farad(4)),
+                       Branch('V1', 0, 3, V=voltage)], ground=0)
+    loops = Loops.from_tree(circuit, cq.default_tree(circuit))
+    loops = Loops(circuit, loops.G, loops.names, loops.closure_branches, dict.fromkeys(loops.names, 0))
+    result = quantize(circuit, loops)
+    values = {'V_drive': 1e-6, 'n_g1': .3}
+    ham = numeric_hamiltonian(result, values)
+    S = np.array([[-1., .25], [0., 1.]])
+    actual = ham.transformed(S)
+    expected = numeric_hamiltonian(result.transform(S), {**values, 'n_g1': -.3})
+    np.testing.assert_allclose(actual.n_g, expected.n_g, rtol=1e-10, atol=1e-12)
+    np.testing.assert_allclose(actual.n_g_source, expected.n_g_source, rtol=1e-10, atol=1e-12)
+    assert actual.n_g_source[1] != 0
+    assert actual.n_g_sector[1] == 0
