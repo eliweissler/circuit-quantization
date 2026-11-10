@@ -443,6 +443,19 @@ def to_spec(res, *, subs=None, simplify=True, mode_names=None) -> dict:
         return printed
 
     def matrix(values, field):
+        values = sym.Matrix(values).applyfunc(prepare)
+        if not values.free_symbols:
+            numbers = [[complex(x.evalf()) for x in row] for row in values.tolist()]
+            scale = max((abs(x) for row in numbers for x in row), default=0)
+            for i in range(values.rows):
+                for j in range(i + 1, values.cols):
+                    a, b = numbers[i][j], numbers[j][i]
+                    if abs(a - b) > 1e-10 * scale:
+                        _fail(field, f"must be symmetric; asymmetry at [{i},{j}] = {values[i,j]} and [{j},{i}] = {values[j,i]}")
+                    average = (values[i, j] + values[j, i]) / 2
+                    if max(abs(a), abs(b)) <= 1e-15 * scale and (values[i,j].has(sym.Float) or values[j,i].has(sym.Float)):
+                        average = sym.S.Zero
+                    values[i, j] = values[j, i] = average
         return [[coefficient(values[i, j], f"{field}[{i},{j}]") for j in range(values.cols)] for i in range(values.rows)]
 
     def vector(values, field):

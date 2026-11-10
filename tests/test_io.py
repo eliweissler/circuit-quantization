@@ -518,3 +518,22 @@ def test_static_split_flux_offsets_round_trip():
     assert loaded.cosines[0][2] == -sym.pi
     assert loaded.flux_linear[0].has(delta) and not loaded.flux_linear[0].has(sym.pi)
     assert sym.simplify(loaded.hamiltonian() - real_symbols(cq.subs_constants(split.H))) == 0
+
+
+
+def test_numeric_export_repairs_roundoff_without_loosening_loader():
+    res = fluxonium()
+    # A two-mode fixture makes the asymmetric off-diagonal pair visible.
+    circuit = fluxonium_pair()
+    res = cq.quantize(circuit, cq.Loops.from_tree(circuit, cq.default_tree(circuit)))
+    values = {s: 1 for s in res.ham.E_C.free_symbols | res.ham.E_L.free_symbols
+              if s.name not in {"e", "h", "h_GHz", "hbar", "Phi0"}}
+    res = cq.numerify(res, values)
+    matrix = sym.Matrix([[1.0, -1.09e-26 / sym.pi**2], [0, 2.0]])
+    res = replace(res, ham=replace(res.ham, E_L=sym.ImmutableMatrix(matrix)))
+    data = cq.to_spec(res)
+    assert data["E_L"][0][1] == data["E_L"][1][0] == "0"
+    cq.load_spec(data)
+    matrix[0, 1] = 0.1
+    with pytest.raises(ValueError, match="asymmetry.*0,1"):
+        cq.to_spec(replace(res, ham=replace(res.ham, E_L=sym.ImmutableMatrix(matrix))))

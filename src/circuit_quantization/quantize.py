@@ -47,7 +47,7 @@ class Result:
         :raises ValueError: Disallowed mixing or an invalid transformation.
         """
         return _result(self.circuit, self.loops, self.lag, transform(self.lag, self.coords, S1), simplify,
-                       B=self.B, B_static=self.B_static, static=self.static)
+                       B=self.B, B_static=self.B_static, static=self.static, check_assignment=False)
 
     def _repr_latex_(self):
         counts = ", ".join(f"{t}: {k}" for t, k in Counter(self.coords.types).items())
@@ -100,15 +100,16 @@ def _check_assignment(loops, B, name):
         raise ValueError(f"{name} must not assign flux to a source branch, which is pinned at V(t)")
 
 
-def _result(circuit, loops, lag, coords, simplify, *, B=None, B_static=None, static=None):
+def _result(circuit, loops, lag, coords, simplify, *, B=None, B_static=None, static=None, check_assignment=True):
     """Flux assignment and Hamiltonian for given coordinates (Sec V, Sec IV)."""
     if B is None:
         B = irrotational_B(lag, coords, loops)
-    else:
+    elif check_assignment:
         _check_assignment(loops, B, "B")
     if B_static is not None:
         B_static = sym.ImmutableMatrix(B_static)
-        _check_assignment(loops, B_static, "B_static")
+        if check_assignment:
+            _check_assignment(loops, B_static, "B_static")
     ham = hamiltonian(lag, coords, loops, B, circuit.t, simplify=simplify, B_static=B_static, static=static)
     return Result(circuit=circuit, loops=loops, lag=lag, coords=coords, B=B, ham=ham,
                   B_static=B_static, static=static)

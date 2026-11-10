@@ -415,3 +415,9 @@ pytest tests/optimize -q
 
 The optimizer tests are skipped automatically when their optional dependencies
 are unavailable. The project is licensed under GPL-3.0-only.
+
+Numeric export symmetrizes fully substituted E_C and E_L only when each
+asymmetric pair differs by at most 1e-10 times the largest matrix entry.
+Floating off-diagonal pairs below 1e-15 times that scale print as exact zero.
+Larger asymmetries report the pair; symbolic matrices and loader validation
+keep their existing rules.

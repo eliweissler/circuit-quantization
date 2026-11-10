@@ -215,3 +215,9 @@ For scqubits **4.3.1**, `ZeroPi.sparse_kinetic_mat` (also used by FullZeroPi) im
 With the junction ordering and phases in the example above, compare using `dCJ_scqubits = -dCJ_circuit` while keeping `dEJ` unchanged; see the [scqubits ZeroPi source](https://scqubits.readthedocs.io/en/v4.3/_modules/scqubits/core/zeropi.html).
 Check this convention again when changing scqubits versions, particularly when both junction asymmetries are nonzero.
 Also align offset-charge conventions and additive energy constants before comparing Hamiltonians or absolute energies.
+
+Numeric export symmetrizes fully substituted E_C and E_L only when each
+asymmetric pair differs by at most 1e-10 times the largest matrix entry.
+Floating off-diagonal pairs below 1e-15 times that scale print as exact zero.
+Larger asymmetries report the pair; symbolic matrices and loader validation
+keep their existing rules.
