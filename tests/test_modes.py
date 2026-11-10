@@ -373,3 +373,37 @@ def test_compact_charge_decoupling_removes_the_compact_noncompact_charge_block(b
     # The automatic basis's harmonic column takes a compact component and becomes extended.
     assert new.types == ("c", "e", "e", "e")
 
+
+
+@pytest.mark.parametrize("block", [sym.eye(2), sym.Matrix([[1, 2], [0, 1]])])
+def test_float_compact_block_is_snapped_exactly(block):
+    from circuit_quantization.modes import _check_residual
+    import numpy as np
+    result = _check_residual(("c", "c"), sym.Matrix(np.array(block, dtype=float)))
+    assert result == block
+
+
+@pytest.mark.parametrize("value", [1.0000001, 0.5, 1 + sym.Rational(1, 10**20)])
+def test_noninteger_compact_entry_is_rejected(value):
+    from circuit_quantization.modes import _check_residual
+    with pytest.raises(ValueError, match=r"S1\[0, 0\].*integer"):
+        _check_residual(("c",), sym.Matrix([[value]]))
+
+
+def test_result_float_identity_preserves_exact_compact_column():
+    import numpy as np
+    from circuit_quantization import quantize, Loops, default_tree
+    circuit = kite()
+    result = quantize(circuit, Loops.from_tree(circuit, default_tree(circuit)))
+    transformed = result.transform(np.eye(len(result.coords.types)))
+    compact = result.coords.types.index("c")
+    assert transformed.coords.Z[:, compact] == result.coords.Z[:, compact]
+
+
+def test_result_float_unimodular_compact_shear():
+    import numpy as np
+    from circuit_quantization import quantize, Loops, default_tree
+    circuit = Circuit([Branch("J1", 1, 0, C=1, EJ=2), Branch("J2", 2, 0, C=3, EJ=5)], ground=0)
+    result = quantize(circuit, Loops.from_tree(circuit, default_tree(circuit)))
+    S = np.array([[1., 2.], [0., 1.]])
+    assert result.transform(S).coords.Z == result.coords.Z * sym.Matrix([[1, 2], [0, 1]])

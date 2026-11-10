@@ -179,6 +179,18 @@ def check_coordinates(lag, Z_full, types):
 
 def _check_residual(types, S):
     """S_1 is invertible, mixes only as eq:S1_structure allows, and S_cc lies in GL(N_c, Z)."""
+    S = sym.MutableDenseMatrix(S).applyfunc(lambda x: sym.S.Zero if x.is_zero else x)
+    compact = [j for j, t in enumerate(types) if t == "c"]
+    if S.shape == (len(types), len(types)):
+        for i in compact:
+            for j in compact:
+                value = S[i, j]
+                if isinstance(value, sym.Float) and value.is_finite:
+                    nearest = round(value)
+                    if abs(value - nearest) <= 1e-12:
+                        S[i, j] = sym.Integer(nearest)
+                if not _is_integer(S[i, j]):
+                    raise ValueError(f"S_cc entry S1[{i}, {j}] = {value} must be an integer for GL(N_c, Z)")
     if S.shape != (len(types), len(types)) or sym.simplify(S.det()) == 0:
         raise ValueError("S1 must be square, invertible, and match the retained modes")
     for i in range(S.rows):
@@ -189,6 +201,7 @@ def _check_residual(types, S):
     S_cc = _cancel(S.extract(compact, compact))
     if compact and (not all(_is_integer(x) for x in S_cc) or abs(S_cc.det()) != 1):
         raise ValueError("S_cc must lie in GL(N_c, Z) (eq:Scc_unimodular)")
+    return sym.ImmutableMatrix(S)
 
 
 # --- decoupling and truncation ----------------------------------------------
@@ -627,7 +640,7 @@ def transform(lag, coords, S1, *, C_tilde=None, Lstar_tilde=None):
     :raises ValueError: Invalid dimensions, disallowed mixing, or nonprimitive compact periods.
     """
     S = sym.ImmutableMatrix(S1)
-    _check_residual(coords.types, S)
+    S = _check_residual(coords.types, S)
     retained = [i for i, t in enumerate(coords.types_full) if t in DYNAMICAL]
     Z_full = coords.Z_full.as_mutable()
     Z = coords.Z * S
