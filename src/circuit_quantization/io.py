@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 import json
 import math
+from numbers import Real
 from os import PathLike
 from pathlib import Path
 import random
@@ -392,7 +393,16 @@ def load_spec(source) -> HamiltonianSpec:
                            _expression(source.get("constant", "0"), symbols, "constant"))
 
 
-def to_spec(res, *, subs=None, simplify=True, mode_names=None) -> dict:
+def _tolerance(value, name):
+    if isinstance(value, bool) or not isinstance(value, Real):
+        _fail(name, f"expected a finite nonnegative real number, got {value!r}")
+    value = float(value)
+    if not math.isfinite(value) or value < 0:
+        _fail(name, f"expected a finite nonnegative real number, got {value!r}")
+    return value
+
+
+def to_spec(res, *, subs=None, simplify=True, mode_names=None, zero_rtol=1e-12, zero_atol=0.0) -> dict:
     """Convert a quantization Result into a JSON-ready Hamiltonian dictionary.
 
     :param res: Quantization Result; only its retained dynamical modes are saved.
@@ -403,9 +413,24 @@ def to_spec(res, *, subs=None, simplify=True, mode_names=None) -> dict:
     :param mode_names: Optional sequence of unique, nonempty labels, in retained
         mode order. Defaults to varphi_1...varphi_N; does not rename coordinates
         or compact-sector parameters (use subs for parameter renaming).
+    :param float zero_rtol: Relative round-off tolerance (default 1e-12). In a
+        fully numeric E_C or E_L, after symmetrization, an entry containing a
+        SymPy Float whose magnitude is at most max(zero_rtol * scale, zero_atol)
+        is written as exact 0, scale being the largest absolute entry of that
+        matrix; symmetric pairs are decided together. In each cosine, a Float
+        omega entry at most zero_rtol times the largest absolute entry of that
+        omega is written as 0; on a compact mode it must also be at most
+        zero_rtol itself, so a non-integer compact entry is still rejected.
+        Exact entries and matrices with free symbols are never zeroed.
+    :param float zero_atol: Absolute tolerance in GHz for E_C and E_L entries
+        (default 0.0); not applied to the dimensionless omega. Pass
+        zero_rtol=0 and zero_atol=0 to disable zeroing.
     :returns: Version 1 kronfree-spec dictionary with coefficients in GHz.
-    :raises ValueError: Unsupported expression, parameter name, or cosine vector.
+    :raises ValueError: Unsupported expression, parameter name, or cosine
+        vector; numeric matrix asymmetry above 1e-10 of its scale; or a
+        negative, nonfinite, or nonnumeric tolerance.
     """
+    zero_rtol, zero_atol = _tolerance(zero_rtol, "zero_rtol"), _tolerance(zero_atol, "zero_atol")
     size = len(res.coords.types)
     if mode_names is None:
         mode_names = [f"varphi_{i + 1}" for i in range(size)]
@@ -452,13 +477,15 @@ def to_spec(res, *, subs=None, simplify=True, mode_names=None) -> dict:
         if not values.free_symbols:
             numbers = [[complex(x.evalf()) for x in row] for row in values.tolist()]
             scale = max((abs(x) for row in numbers for x in row), default=0)
+            threshold = max(zero_rtol * scale, zero_atol)
             for i in range(values.rows):
-                for j in range(i + 1, values.cols):
+                for j in range(i, values.cols):
                     a, b = numbers[i][j], numbers[j][i]
                     if abs(a - b) > 1e-10 * scale:
                         _fail(field, f"must be symmetric; asymmetry at [{i},{j}] = {values[i,j]} and [{j},{i}] = {values[j,i]}")
-                    average = (values[i, j] + values[j, i]) / 2
-                    if max(abs(a), abs(b)) <= 1e-15 * scale and (values[i,j].has(sym.Float) or values[j,i].has(sym.Float)):
+                    average = values[i, j] if i == j else (values[i, j] + values[j, i]) / 2
+                    # Only floating-point residue is zeroed, never an exact entry.
+                    if abs(a + b) / 2 <= threshold and (values[i,j].has(sym.Float) or values[j,i].has(sym.Float)):
                         average = sym.S.Zero
                     values[i, j] = values[j, i] = average
         return [[coefficient(values[i, j], f"{field}[{i},{j}]") for j in range(values.cols)] for i in range(values.rows)]
@@ -475,12 +502,22 @@ def to_spec(res, *, subs=None, simplify=True, mode_names=None) -> dict:
     cosines = []
     for k, branch in enumerate(res.lag.J):
         field = f"junction {res.circuit.branch_names[branch]}"
-        omega = []
+        values = []
         for j, mode in enumerate(modes):
             value = prepare(res.coords.omega_J_tilde[j, k])
-            where = f"{field}, mode {mode['name']}"
             if value.free_symbols or value.is_number is not True or value.is_real is not True or value.is_finite is not True:
-                _fail(where, "omega must be a finite real number without free symbols")
+                _fail(f"{field}, mode {mode['name']}", "omega must be a finite real number without free symbols")
+            values.append(value)
+        scale = max((abs(float(value)) for value in values), default=0)
+        omega = []
+        for value, mode in zip(values, modes):
+            where = f"{field}, mode {mode['name']}"
+            # Zero Float residue relative to this omega; on a compact mode also
+            # relative to the integer lattice, so the integer check below
+            # still rejects any entry that is not within zero_rtol of 0.
+            limit = zero_rtol * (min(scale, 1) if mode["type"] == "c" else scale)
+            if value.has(sym.Float) and abs(float(value)) <= limit:
+                value = sym.S.Zero
             integer = value.is_integer is True or (isinstance(value, sym.Float) and (value % 1).is_zero)
             if mode["type"] == "c" and not integer:
                 _fail(where, f"omega {value} on a compact mode must be an integer")
@@ -506,7 +543,8 @@ def save_spec(res, path, **kwargs) -> dict:
 
     :param res: Quantization Result to export.
     :param path: Destination str or PathLike, overwritten only after validation.
-    :param kwargs: Forwarded to to_spec (subs, simplify, and mode_names).
+    :param kwargs: Forwarded to to_spec (subs, simplify, mode_names,
+        zero_rtol, and zero_atol).
     :returns: The JSON-ready dictionary written to path.
     """
     data = to_spec(res, **kwargs)
@@ -522,6 +560,8 @@ def to_record(res, path=None, *, subs=None, **kwargs):
     write JSON there; always return the dictionary. Expressions use the same
     restricted grammar as the spec. Nodes must be JSON scalars or tuples of
     JSON scalars; arbitrary Python objects and undefined functions are unsupported.
+    Other keyword arguments (simplify, mode_names, zero_rtol, zero_atol) are
+    forwarded to to_spec.
     """
     import subprocess
 
