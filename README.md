@@ -303,6 +303,16 @@ S1, info = cq.product_state_S1(
 )
 ```
 
+For a hierarchical solve that truncates between a harmonic mode and a junction mode,
+`shear_S1` chooses how far to shear the one onto the other (docs/shear-rule.md):
+pass the `(harmonic, junction)` mode pairs the tree separates.
+
+```python
+S1, info = cq.shear_S1(ham, [(f, J)])   # mode indices in ham.types order
+print(info)                            # the fraction s* and its inputs per pair
+sheared = result.transform(S1)         # or ham.transformed(S1)
+```
+
 `numeric_hamiltonian` evaluates a serialized `HamiltonianSpec` at numerical
 parameter values. `exact_ground_state`, `infidelity`, and
 `subspace_infidelity` provide small-system references. Product-state
@@ -417,10 +427,19 @@ The optimizer tests are skipped automatically when their optional dependencies
 are unavailable. The project is licensed under GPL-3.0-only.
 
 Numeric export symmetrizes fully substituted E_C and E_L only when each
-asymmetric pair differs by at most 1e-10 times the largest matrix entry.
-Floating off-diagonal pairs below 1e-15 times that scale print as exact zero.
-Larger asymmetries report the pair; symbolic matrices and loader validation
-keep their existing rules.
+asymmetric pair differs by at most 1e-10 times the largest matrix entry;
+larger asymmetries report the pair. After symmetrization, any entry (diagonal
+included, pairs decided together) that contains a floating-point number and
+has magnitude at most `max(zero_rtol * scale, zero_atol)` prints as exact
+zero, where scale is that largest matrix entry. The keyword arguments of
+`to_spec` (also accepted by `save_spec` and `to_record`) default to
+`zero_rtol=1e-12` and `zero_atol=0.0` GHz; pass `zero_rtol=0, zero_atol=0` to
+keep every round-off entry. Each cosine's floating-point `omega` entries at
+most `zero_rtol` times that vector's largest entry also print as 0 (on a
+compact mode, the entry must also be at most `zero_rtol`, so a non-integer
+compact entry is still rejected); `zero_atol` does not apply to `omega`.
+Exact entries, symbolic matrices and loader validation keep their existing
+rules, and the version 1 format is unchanged.
 
 Use `cq.numeric_hamiltonian(result_or_spec, values)` once to evaluate a Result
 or HamiltonianSpec. `ham.transformed(S)` then checks the residual blocks and
