@@ -303,6 +303,16 @@ S1, info = cq.product_state_S1(
 )
 ```
 
+For a hierarchical solve that truncates between a harmonic mode and a junction mode,
+`shear_S1` chooses how far to shear the one onto the other (docs/shear-rule.md):
+pass the `(harmonic, junction)` mode pairs the tree separates.
+
+```python
+S1, info = cq.shear_S1(ham, [(f, J)])   # mode indices in ham.types order
+print(info)                            # the fraction s* and its inputs per pair
+sheared = result.transform(S1)         # or ham.transformed(S1)
+```
+
 `numeric_hamiltonian` evaluates a serialized `HamiltonianSpec` at numerical
 parameter values. `exact_ground_state`, `infidelity`, and
 `subspace_infidelity` provide small-system references. Product-state
