@@ -57,7 +57,7 @@ class Result:
 
     def _repr_latex_(self):
         counts = ", ".join(f"{t}: {k}" for t, k in Counter(self.coords.types).items())
-        return f"$\\displaystyle H_{{\\mathrm{{GHz}}}} = {sym.latex(self.H)}$  (modes {counts})"
+        return f"$\\displaystyle H_{{\\mathrm{{GHz}}}} = {sym.latex(self.H)} \\quad \\text{{(modes {counts})}}$"
 
 
 def quantize(circuit, loops, Z_full=None, types=None, *, simplify=False, B=None, B_static=None, static=None):

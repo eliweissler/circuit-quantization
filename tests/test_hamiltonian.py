@@ -85,6 +85,15 @@ def test_result_exposes_named_matrices_and_latex():
     assert r"H_{\mathrm{GHz}}" in res._repr_latex_()
 
 
+def test_result_latex_is_one_math_span():
+    """Notebook renderers (Jupyter, myst-nb) need text/latex that is entirely math."""
+    circuit = kite()
+    res = quantize(circuit, Loops.from_branch_dict(circuit, KITE_CYCLES, {"cb": 0}), KITE_Z, ("c", "e", "e"))
+    latex = res._repr_latex_()
+    assert latex.startswith("$") and latex.endswith("$") and latex.count("$") == 2
+    assert r"\text{(modes c: 1, e: 2)}" in latex
+
+
 def test_transmon_without_loops_and_with_float_parameters():
     circuit = Circuit([Branch("J", "island", "gnd", C=97e-15, EJ=15.0)], ground="gnd")
     res = quantize(circuit, Loops.from_branch_dict(circuit, {}))
