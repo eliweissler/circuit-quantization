@@ -54,10 +54,9 @@ def draw_circuit_diagram(circuit, out=None, *, layout="planar", scale=4., spread
     ground = circuit.ground
     split = grounds is not None and ground is not None
     nodes = [n for n in circuit.nodes if not (split and n == ground)]
-    graph = nx.Graph()
-    graph.add_nodes_from(nodes)
-    graph.add_edges_from((b.tail, b.head) for b in circuit.branches
-                         if not (split and ground in (b.tail, b.head)))
+    # Edges first: node order follows the branches, as automatic layouts depend on it.
+    graph = nx.Graph((b.tail, b.head) for b in circuit.branches if not (split and ground in (b.tail, b.head)))
+    graph.add_nodes_from(nodes)  # nodes reached only through ground
     if isinstance(layout, dict):
         if set(nodes) - set(layout):
             raise ValueError("layout must give a position for every circuit node")
@@ -104,9 +103,10 @@ def draw_circuit_diagram(circuit, out=None, *, layout="planar", scale=4., spread
                 terminals[n] = pos[n] + scale * outward / np.linalg.norm(outward)
         if any(t.shape != (2,) or not np.isfinite(t).all() for t in terminals.values()):
             raise ValueError("ground terminal positions must be finite (x, y) pairs")
-        points = [tuple(p) for p in pos.values()] + [tuple(t) for t in terminals.values()]
-        if len(set(points)) != len(points):
-            raise ValueError("ground terminals must be distinct from each other and from nodes")
+        points = list(pos.values()) + list(terminals.values())
+        if any(np.linalg.norm(p - q) < 1e-6 * scale for i, p in enumerate(points) for q in points[i + 1:]):
+            raise ValueError("ground terminals must not coincide with each other or with nodes; "
+                             "try grounds='radial', another layout, or explicit grounds positions")
 
     def place(node, other):
         """Drawing position of node on a branch to other; split ground goes to other's terminal."""

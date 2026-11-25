@@ -1,4 +1,4 @@
-"""How far to shear a harmonic mode onto a junction mode: the rule of docs/shear-rule.md.
+"""How far to shear a harmonic mode onto a junction mode.
 
 In a frame where a junction mode ``J`` (a phase inside a cosine) and a harmonic mode ``f`` couple only through
 ``E_L[f, J] x_f x_J``, the shear ``x_f = y_f + a x_J`` by the full amount ``a* = -E_L[f, J] / E_L[f, f]`` removes that

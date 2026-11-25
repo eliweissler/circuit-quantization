@@ -5,7 +5,7 @@ pytest.importorskip("matplotlib")
 import schemdraw.elements as elm
 
 from circuit_quantization import Branch, Circuit, draw_circuit_diagram
-from circuits import zero_pi
+from circuits import fluxonium_pair, kite, zero_pi
 
 
 @pytest.mark.parametrize("reverse", [False, True])
@@ -167,3 +167,28 @@ def test_default_grounds_unchanged():
 @pytest.mark.parametrize("mode", ["below", "radial"])
 def test_floating_circuit_ignores_grounds(mode):
     assert not grounds_of(draw_circuit_diagram(zero_pi(), grounds=mode))
+
+
+DEFAULT_POSITIONS = {  # draw_circuit_diagram before grounds= existed; layouts must not move
+    ("zero_pi", "planar"): {"1": (-8.0, -3.0), "3": (8.0, -3.0), "2": (0.0, 5.0), "4": (0.0, 1.0)},
+    ("zero_pi", "polygon"): {"1": (2.8284, 0.0), "3": (0.0, 2.8284), "2": (-2.8284, 0.0), "4": (0.0, -2.8284)},
+    ("fluxonium_pair", "planar"): {"1": (-1.7889, 2.3851), "0": (0.0, -2.9814), "2": (1.7889, 0.5963)},
+    ("fluxonium_pair", "polygon"): {"1": (-2.0, 1.1547), "0": (0.0, -2.3094), "2": (2.0, 1.1547)},
+    ("kite", "planar"): {"1": (0.0, 6.7082), "4": (0.0, -2.2361), "2": (3.5777, -0.4472), "3": (-3.5777, -4.0249)},
+    ("kite", "polygon"): {"1": (-2.8284, 0.0), "4": (0.0, -2.8284), "2": (2.8284, 0.0), "3": (0.0, 2.8284)},
+}
+
+
+@pytest.mark.parametrize("name, layout", sorted(DEFAULT_POSITIONS))
+def test_default_layout_positions_unchanged(name, layout):
+    drawing = draw_circuit_diagram({"zero_pi": zero_pi, "fluxonium_pair": fluxonium_pair, "kite": kite}[name](),
+                                   layout=layout)
+    dots = {e._userlabels[0].label: tuple(e.absanchors["start"]) for e in drawing.elements if isinstance(e, elm.Dot)}
+    assert dots.keys() == DEFAULT_POSITIONS[name, layout].keys()
+    for node, expected in DEFAULT_POSITIONS[name, layout].items():
+        assert dots[node] == pytest.approx(expected, abs=1e-3)
+
+
+def test_ground_terminal_nearly_on_a_node_raises():
+    with pytest.raises(ValueError, match="radial"):
+        draw_circuit_diagram(grounded_pair(), layout={"a": (0, 1.0000001), "b": (0, 0)}, grounds="below")

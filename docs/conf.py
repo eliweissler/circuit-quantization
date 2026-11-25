@@ -21,7 +21,8 @@ nb_execution_timeout = 300
 nb_execution_raise_on_error = True
 
 autodoc_member_order = "bysource"
-autodoc_mock_imports = ["z3", "func_timeout"]
+# Optional optimizer dependencies; readthedocs has neither z3 nor the Singular binary.
+autodoc_mock_imports = ["z3", "func_timeout", "circuit_quantization.optimize.singular_interface"]
 
 exclude_patterns = ["_build", "jupyter_execute", "**.ipynb_checkpoints"]
 html_theme = "furo"

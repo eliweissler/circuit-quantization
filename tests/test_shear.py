@@ -7,7 +7,7 @@ from circuit_quantization.shear import shear_S1
 
 
 def junction_frame(EC, EL, EJ, theta, ECf, ELf, kappa=0.25):
-    """One junction mode x and one harmonic frame mode f coupled by g x f (docs/shear-rule.md, the toy model)."""
+    """One junction mode x and one harmonic frame mode f coupled by g x f (the toy model)."""
     g = kappa * np.sqrt(EL * ELf)
     return NumericHamiltonian(types=("e", "h"), E_C=np.diag([EC, ECf]), E_L=np.array([[EL, g], [g, ELf]]),
                               flux_linear=np.zeros(2), n_g=np.zeros(2), cosines=((EJ, np.array([1.0, 0.0]), theta),))
@@ -38,7 +38,7 @@ def test_harmonic_junction_gives_the_exact_fraction():
     (COUPLER, 3.27, 0.277),     # a soft frame mode against a single-well coupler: about a quarter
 ])
 def test_matches_the_toy_model(junction, ELf, expected):
-    # docs/shear-rule.md, section "Toy model", column s* (3), from an independent solve (sinc DVR)
+    # Toy-model values of s* (3), from an independent solve (sinc DVR)
     ham = junction_frame(**junction, ECf=0.3874, ELf=ELf)
     _, info = shear_S1(ham, [(1, 0)])
     assert info.pairs[0].s == pytest.approx(expected, abs=2e-3)

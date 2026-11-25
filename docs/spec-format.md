@@ -18,8 +18,8 @@ H/h\;[\mathrm{GHz}] =
 +c.
 $$
 
-Here `flux_linear` is \(\mathbf b\), each cosine supplies `energy`, `omega`, and `offset`, and `constant` is \(c\).
-Phases and cosine offsets are dimensionless radians, and charges are in units of \(2e\).
+Here `flux_linear` is $\mathbf b$, each cosine supplies `energy`, `omega`, and `offset`, and `constant` is $c$.
+Phases and cosine offsets are dimensionless radians, and charges are in units of $2e$.
 `E_C`, `E_L`, `flux_linear`, cosine energies, and `constant` are in GHz (ordinary frequency, not angular frequency).
 The coefficient expressions may retain SI-valued parameters such as capacitances in farads, inductances in henries, voltages in volts, and fluxes in webers; `units` describes the resulting Hamiltonian, not every parameter.
 Parameter units are the producer's responsibility and are not inferred by the loader.
@@ -130,7 +130,7 @@ The linear term is positive in this convention.
 }
 ```
 
-The source Hamiltonian omits the flux-only inductive energy, so export writes `constant: "0"` rather than adding \(E_L\varphi_{\rm ext}^2/2\).
+The source Hamiltonian omits the flux-only inductive energy, so export writes `constant: "0"` rather than adding $E_L\varphi_{\rm ext}^2/2$.
 Import preserves a nonzero `constant` when another producer supplies one.
 Voltage-source contributions and compact-sector labels are retained in `n_g` with their original signs; `n_g` is not forcibly zeroed on noncompact modes.
 
