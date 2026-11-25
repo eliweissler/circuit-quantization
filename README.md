@@ -10,6 +10,9 @@ The package supports grounded and floating circuits, compact and noncompact
 coordinates, automatic or user-supplied mode bases, coordinate optimization,
 JSON interchange, circuit drawing, and export to scqubits.
 
+Documentation, including worked examples, is at
+<https://circuit-quantization.readthedocs.io>.
+
 ## Highlights
 
 - Symbolic circuit construction with exact SymPy expressions.
@@ -334,6 +337,15 @@ The default layout is planar with a spring-layout fallback. Pass `layout` as
 `"spring"`, `"polygon"`, or an explicit `{node: (x, y)}` dictionary. Parallel
 branches are drawn in separate lanes. Flux labels can be added with
 `flux_labels={label: (x, y)}`.
+
+By default the ground node is drawn once. Pass `grounds="below"` or
+`grounds="radial"` to give each grounded node its own ground symbol, beneath
+it or outward from the circuit's center, or `grounds={node: (x, y)}` to place
+each one explicitly:
+
+```python
+cq.draw_circuit_diagram(circuit, grounds="radial")
+```
 
 ## scqubits export
 

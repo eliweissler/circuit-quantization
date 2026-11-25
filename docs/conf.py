@@ -23,6 +23,6 @@ nb_execution_raise_on_error = True
 autodoc_member_order = "bysource"
 autodoc_mock_imports = ["z3", "func_timeout"]
 
-exclude_patterns = ["_build", "jupyter_execute", "superpowers", "**.ipynb_checkpoints"]
+exclude_patterns = ["_build", "jupyter_execute", "**.ipynb_checkpoints"]
 html_theme = "furo"
 html_title = "circuit-quantization"
