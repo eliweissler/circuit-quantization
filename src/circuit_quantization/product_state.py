@@ -1,5 +1,10 @@
 """Product-state coordinates: the mean-field cost of Sec. III.B.
 
+Experimental extension, not part of the stable API: import it as
+``circuit_quantization.product_state``. Only ``NumericHamiltonian``,
+``numeric_hamiltonian``, and ``normal_mode_transformation`` are re-exported
+from the top-level package.
+
 The product ansatz ``|Psi> = (x)_i |psi_i>`` is optimized self-consistently
 for the Hamiltonian written in the transformed coordinates ``phi = S phi'``,
 and its energy is the cost minimized over ``S(x)`` of ``eq:S_numerical``.

@@ -1,16 +1,27 @@
-"""Symbolic quantization of superconducting circuits.
+"""Symbolic quantization of lumped superconducting circuits.
 
-Companion code to the circuit quantization notes; each module follows one section:
+Build a :class:`Circuit` from :class:`Branch` elements, choose :class:`Loops`,
+and call :func:`quantize` for the symbolic Hamiltonian ``H/h`` in GHz.
 
-    units.py        Sec VI   constants and converters
-    circuit.py      Sec I    Branch, Circuit, incidence
-    loops.py        Sec I.C  Loops, branch_dict_to_G, check_loops, cycle_bases, default_tree, spanning_trees, tree_to_G
-    lagrangian.py   Sec II   element and incidence matrices
-    modes.py        Sec III  mode classification, decoupling, residual freedom
-    flux.py         Sec V    irrotational flux assignment
-    hamiltonian.py  Sec IV   frequency-unit Hamiltonian
+    circuit.py      Branch, Circuit, incidence
+    loops.py        loop bases and external fluxes
+    lagrangian.py   capacitance, inductance, and incidence matrices
+    modes.py        mode classification, decoupling, residual freedom
+    numerical.py    numerical coordinate searches
+    shear.py        partial shears of harmonic modes onto junction modes
+    flux.py         irrotational flux assignment
+    hamiltonian.py  frequency-unit Hamiltonian
+    quantize.py     end-to-end quantization and Result
+    io.py           JSON interchange (kronfree-spec)
+    draw.py         Schemdraw circuit diagrams (optional: ``[draw]``)
+    units.py        constants and unit converters
 
-Symbols in the notes and their names here:
+Extensions, imported explicitly:
+
+    circuit_quantization.optimize        exact symbolic coordinate search (optional: ``[optimize]``)
+    circuit_quantization.product_state   experimental product-state solver
+
+Matrix names follow the matrix formulation:
 
     Omega, Omega_int    incidence matrix and its internal rows
     omega_J_int         junction columns of Omega_int
@@ -52,8 +63,7 @@ from .modes import (
     transform,
 )
 from .numerical import cost_localization, cost_normal_modes, cost_targeted, numerical_S1, parameterization
-from .product_state import (NumericHamiltonian, cost_product_state, exact_ground_state, infidelity, subspace_infidelity,
-                            normal_mode_transformation, numeric_hamiltonian, product_state, product_state_S1)
+from .product_state import NumericHamiltonian, normal_mode_transformation, numeric_hamiltonian
 from .shear import shear_S1
 from .quantize import Result, numerify, quantize
 from .qpackage_interface import scqubits_yaml, to_scqubits

@@ -21,8 +21,8 @@ JSON interchange, circuit drawing, and export to scqubits.
   over valid residual coordinate transformations.
 - Optional symbolic coordinate optimization with Singular and Z3.
 - JSON serialization, Schemdraw diagrams, and scqubits export.
-- Experimental product-state and hierarchical-basis tools for comparing
-  coordinate choices in nonlinear circuits.
+- An experimental product-state extension for comparing coordinate choices
+  in nonlinear circuits.
 
 ## Installation
 
@@ -273,9 +273,10 @@ parameter symbols. It reconstructs the Hamiltonian but not the full circuit or
 quantization pipeline. See [the format specification](docs/spec-format.md) for
 the schema, validation rules, and compatibility limits.
 
-## Numerical product-state tools
+## Experimental product-state extension
 
-The experimental product-state module evaluates a self-consistent product
+The experimental `circuit_quantization.product_state` module is not part of
+the stable API and must be imported explicitly. It evaluates a self-consistent product
 ground state in compact charge bases and noncompact phase-grid bases. It can
 also optimize the residual coordinates by minimizing the product-state energy.
 
@@ -294,8 +295,10 @@ ham = cq.NumericHamiltonian(
     ),
 )
 
-state = cq.product_state(ham, max_points=120)
-S1, info = cq.product_state_S1(
+from circuit_quantization.product_state import product_state, product_state_S1
+
+state = product_state(ham, max_points=120)
+S1, info = product_state_S1(
     ham,
     relaxed=True,
     regularization=1e-4,
@@ -304,7 +307,7 @@ S1, info = cq.product_state_S1(
 ```
 
 For a hierarchical solve that truncates between a harmonic mode and a junction mode,
-`shear_S1` chooses how far to shear the one onto the other (docs/shear-rule.md):
+`shear_S1` chooses how far to shear the one onto the other:
 pass the `(harmonic, junction)` mode pairs the tree separates.
 
 ```python
@@ -382,7 +385,8 @@ are not supported. Loop fluxes and offset charges are not copied from a
 | `lagrangian.py` | Capacitance, inductive, incidence, and source matrices |
 | `modes.py` | Mode classification, truncation, residual freedom, and analytic decoupling |
 | `numerical.py` | Invertible numerical parameterizations and coordinate costs |
-| `product_state.py` | Product-state solvers, exact references, and coordinate optimization |
+| `shear.py` | Partial shears of harmonic modes onto junction modes |
+| `product_state.py` | Experimental product-state solvers, exact references, and coordinate optimization |
 | `flux.py` | Irrotational and user-controlled flux assignments |
 | `hamiltonian.py` | Symbolic Hamiltonian construction and simplification |
 | `quantize.py` | End-to-end quantization and the `Result` interface |
@@ -393,18 +397,8 @@ are not supported. Loop fluxes and offset charges are not copied from a
 
 ## Examples
 
-The `examples/` directory contains complete workflows:
-
-- `harmonium.ipynb`, `zero_pi.ipynb`, `kite.ipynb`, and `rhombus.ipynb` build
-  representative superconducting circuits.
-- `lclc_box.ipynb` demonstrates a circuit with nondynamical coordinates.
-- `drawing.ipynb` shows diagram layouts and annotations.
-- `product_state_demo.py` compares reference, normal-mode, and optimized
-  product-state coordinates.
-- `hierarchical_kite.py` compares truncated hierarchical bases for the KITE.
-
-The numerical product-state scripts perform large eigensolves and can take
-substantially longer than the notebooks.
+Worked examples (transmon, fluxonium, coupled fluxonia, 0-π, coupled 0-π, and
+the KITE) are notebooks in [`docs/examples/`](docs/examples/).
 
 ## Development
 

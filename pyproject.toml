@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "circuit-quantization"
 version = "0.2.0"
-description = "Symbolic quantization of superconducting circuits, following the matrix-formulation notes"
+description = "Symbolic quantization of superconducting circuits"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "GPL-3.0-only"
