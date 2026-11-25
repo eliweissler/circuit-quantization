@@ -18,6 +18,7 @@ draw = ["schemdraw>=0.19", "numpy>=1.26", "matplotlib>=3.8"]
 # Also needs the Singular binary on PATH (conda-forge: singular).
 optimize = ["z3-solver>=4.15,<4.16", "func-timeout>=4.3"]
 test = ["pytest>=8.3", "scqubits>=4.2"]
+docs = ["sphinx>=7", "myst-nb>=1.1", "furo>=2024.1", "schemdraw>=0.19", "numpy>=1.26", "matplotlib>=3.8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

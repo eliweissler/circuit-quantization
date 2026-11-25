@@ -312,7 +312,7 @@ def _free_entries(lag, coords, S):
 def choose_instance(lag, coords, S1, *, max_weight=None, debug=False):
     """sircuitenum's integer instance of one S_1 family: z3's minimum junction weight.
 
-    The weight is the sum of |junction coefficients| on compact and extended modes,
+    The weight is the sum of absolute junction coefficients on compact and extended modes,
     which must come out integer, as in sircuitenum's parameter-independent families;
     families with non-integer extended coefficients, such as normal-mode seeds, are
     not meant for this (use instance). An S_1 with no free entries is returned as is;

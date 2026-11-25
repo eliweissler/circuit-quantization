@@ -220,3 +220,6 @@ __marimo__/
 
 # macOS
 .DS_Store
+
+# Sphinx/myst-nb
+docs/jupyter_execute/

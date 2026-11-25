@@ -9,14 +9,14 @@ The Python implementation is `src/circuit_quantization/io.py`, with executable v
 
 The file encodes the following symbolic Hamiltonian:
 
-\[
+$$
 H/h\;[\mathrm{GHz}] =
 4(\mathbf n-\mathbf n_g)^{\mathsf T}E_C(\mathbf n-\mathbf n_g)
 +\tfrac12\boldsymbol\varphi^{\mathsf T}E_L\boldsymbol\varphi
 +\boldsymbol\varphi^{\mathsf T}\mathbf b
 -\sum_k E_{J,k}\cos(\boldsymbol\omega_k^{\mathsf T}\boldsymbol\varphi+\delta_k)
 +c.
-\]
+$$
 
 Here `flux_linear` is \(\mathbf b\), each cosine supplies `energy`, `omega`, and `offset`, and `constant` is \(c\).
 Phases and cosine offsets are dimensionless radians, and charges are in units of \(2e\).

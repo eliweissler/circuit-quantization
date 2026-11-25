@@ -241,10 +241,11 @@ class Circuit:
 
 
 def incidence(circuit, *, elem=None):
-    """:param circuit: Circuit whose ordered nodes and branches define the matrix.
+    """Incidence matrix Omega: +1 at each branch's tail and -1 at its head (Sec I.B).
+
+    :param circuit: Circuit whose ordered nodes and branches define the matrix.
     :param elem: Optional branch type to select a submatrix - C, J, L, or V (Sec I.B, tab:elements).
     :returns: Immutable integer matrix with node rows and branch columns.
-    Omega: +1 at each branch's tail and -1 at its head (Sec I.B).
     """
     row = {node: i for i, node in enumerate(circuit.nodes)}
     branches = [b for b in circuit.branches if elem is None or b.type == elem]
