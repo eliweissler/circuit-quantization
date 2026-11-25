@@ -8,7 +8,8 @@ import networkx as nx
 
 
 def draw_circuit_diagram(circuit, out=None, *, layout="planar", scale=4., spread=.4,
-                         label=True, node_labels=True, label_loc=None, flux_labels=None):
+                         label=True, node_labels=True, label_loc=None, flux_labels=None,
+                         grounds=None):
     """Return a Schemdraw Drawing, optionally saved to SVG, PDF, or PNG.
 
     layout: 'planar' (spring fallback), 'spring', 'polygon', or {node: (x, y)}.
@@ -17,6 +18,11 @@ def draw_circuit_diagram(circuit, out=None, *, layout="planar", scale=4., spread
     length. label controls branch names; label_loc overrides node label sides.
     flux_labels maps text (including $math$) to (x, y) positions, multiplied by
     scale just like explicit node positions. These are display-only annotations.
+    grounds splits the ground node into one terminal per node wired to ground:
+    'below' puts each terminal one scale-length beneath its node, 'radial' puts it
+    one scale-length outward from the centroid of the other nodes, and a dict
+    {node: (x, y)} gives every terminal explicitly, multiplied by scale. With split
+    grounds the layout omits the ground node. Floating circuits ignore grounds.
     Voltage sources have + toward the source node.
     Boxed junctions include intrinsic C; an inductor's C is shown in parallel.
     Install the optional dependencies with ``pip install '.[draw]'``.
@@ -30,8 +36,9 @@ def draw_circuit_diagram(circuit, out=None, *, layout="planar", scale=4., spread
     :param bool node_labels: Show node labels.
     :param label_loc: Optional node-to-label-side mapping (top, bottom, left, right).
     :param flux_labels: Optional mapping from annotation text to (x, y) coordinates.
+    :param grounds: None (one ground symbol), 'below', 'radial', or {node: (x, y)}.
     :returns: Schemdraw Drawing, renderable inline in notebooks.
-    :raises ValueError: Invalid layout, positions, scale, or spacing.
+    :raises ValueError: Invalid layout, positions, scale, spacing, or grounds.
     """
     import numpy as np
     import schemdraw
@@ -40,34 +47,70 @@ def draw_circuit_diagram(circuit, out=None, *, layout="planar", scale=4., spread
 
     if scale <= 0 or spread <= 0:
         raise ValueError("scale and spread must be positive")
-    graph = nx.Graph((b.tail, b.head) for b in circuit.branches)
+    if grounds is not None and not isinstance(grounds, dict) and grounds not in ("below", "radial"):
+        raise ValueError("grounds must be None, 'below', 'radial', or a node-position dict")
+    if not isinstance(layout, dict) and layout not in ("planar", "spring", "polygon"):
+        raise ValueError("layout must be planar, spring, polygon, or a node-position dict")
+    ground = circuit.ground
+    split = grounds is not None and ground is not None
+    nodes = [n for n in circuit.nodes if not (split and n == ground)]
+    graph = nx.Graph()
+    graph.add_nodes_from(nodes)
+    graph.add_edges_from((b.tail, b.head) for b in circuit.branches
+                         if not (split and ground in (b.tail, b.head)))
     if isinstance(layout, dict):
-        if set(circuit.nodes) - set(layout):
+        if set(nodes) - set(layout):
             raise ValueError("layout must give a position for every circuit node")
-        pos = {n: np.asarray(layout[n], dtype=float) * scale for n in circuit.nodes}
+        pos = {n: np.asarray(layout[n], dtype=float) * scale for n in nodes}
     else:
-        if layout == "planar" and nx.is_planar(graph):
+        if len(nodes) == 1:
+            pos = {nodes[0]: np.zeros(2)}
+        elif layout == "planar" and nx.is_planar(graph) and nx.is_connected(graph):
             pos = nx.planar_layout(graph)
         elif layout in ("planar", "spring"):
             pos = nx.spring_layout(graph, seed=0)
-        elif layout == "polygon":
-            pos = nx.circular_layout(graph)
         else:
-            raise ValueError("layout must be planar, spring, polygon, or a node-position dict")
+            pos = nx.circular_layout(graph)
         # Put ground below the circuit; retain labels instead of renumbering nodes.
         center = np.mean(list(pos.values()), axis=0)
         pos = {n: p - center for n, p in pos.items()}
-        if circuit.ground in pos:
-            x, y = pos[circuit.ground]
+        if ground in pos:
+            x, y = pos[ground]
             if x or y:
                 rotation = np.array([[-y, x], [-x, -y]]) / np.hypot(x, y)
                 pos = {n: rotation @ p for n, p in pos.items()}
-        shortest = min(np.linalg.norm(pos[a] - pos[b]) for a, b in graph.edges)
-        pos = {n: p * scale / shortest for n, p in pos.items()}
+        pairs = list(graph.edges) or [(a, b) for i, a in enumerate(nodes) for b in nodes[i + 1:]]
+        if pairs:
+            shortest = min(np.linalg.norm(pos[a] - pos[b]) for a, b in pairs)
+            pos = {n: p * scale / shortest for n, p in pos.items()}
     if any(p.shape != (2,) or not np.isfinite(p).all() for p in pos.values()):
         raise ValueError("node positions must be finite (x, y) pairs")
     if len({tuple(p) for p in pos.values()}) != len(pos):
         raise ValueError("node positions must be distinct")
+
+    terminals = {}  # grounded node -> position of its own ground symbol
+    if split:
+        grounded = [n for n in nodes if any({n, ground} == {b.tail, b.head} for b in circuit.branches)]
+        centroid = np.mean(list(pos.values()), axis=0)
+        for n in grounded:
+            if isinstance(grounds, dict):
+                if n not in grounds:
+                    raise ValueError(f"grounds must give a terminal position for grounded node {n!r}")
+                terminals[n] = np.asarray(grounds[n], dtype=float) * scale
+            else:
+                outward = pos[n] - centroid
+                if grounds == "below" or np.linalg.norm(outward) < 1e-9 * scale:
+                    outward = np.array([0., -1.])
+                terminals[n] = pos[n] + scale * outward / np.linalg.norm(outward)
+        if any(t.shape != (2,) or not np.isfinite(t).all() for t in terminals.values()):
+            raise ValueError("ground terminal positions must be finite (x, y) pairs")
+        points = [tuple(p) for p in pos.values()] + [tuple(t) for t in terminals.values()]
+        if len(set(points)) != len(points):
+            raise ValueError("ground terminals must be distinct from each other and from nodes")
+
+    def place(node, other):
+        """Drawing position of node on a branch to other; split ground goes to other's terminal."""
+        return terminals[other] if split and node == ground else pos[node]
 
     # Group by unordered endpoints without comparing heterogeneous node labels.
     groups = {}
@@ -76,12 +119,14 @@ def draw_circuit_diagram(circuit, out=None, *, layout="planar", scale=4., spread
         group.append((b, b.type, b.name))
         if b.type == "L" and b.C != 0:
             group.append((b, "C", f"$C_{{{b.name}}}$"))
-    min_r = min(np.linalg.norm(pos[a] - pos[b]) for a, b in graph.edges)
+    ends = {key: (place(g[0][0].tail, g[0][0].head), place(g[0][0].head, g[0][0].tail))
+            for key, g in groups.items()}
+    min_r = min(np.linalg.norm(a - b) for a, b in ends.values())
     drawing = schemdraw.Drawing(show=False, canvas="matplotlib", fontsize=11)
     elements = {"C": elm.Capacitor, "J": elm.Josephson, "L": elm.Inductor2, "V": elm.SourceV}
-    for group in groups.values():
+    for key, group in groups.items():
         first = group[0][0]
-        a, b = pos[first.tail], pos[first.head]
+        a, b = ends[key]
         direction = b - a
         normal = np.array([-direction[1], direction[0]]) / np.linalg.norm(direction)
         if len(group) > 1:
@@ -112,13 +157,17 @@ def draw_circuit_diagram(circuit, out=None, *, layout="planar", scale=4., spread
     for node, point in pos.items():
         dot = elm.Dot(radius=.07).at(point)
         if node_labels:
-            neighbors = [pos[n] - point for n in graph.neighbors(node)]
+            neighbors = [far - near for near, far in
+                         (pair if np.array_equal(pair[0], point) else pair[::-1] for pair in ends.values())
+                         if np.array_equal(near, point)]
             directions = [v / np.linalg.norm(v) for v in neighbors]
             side = min(sides, key=lambda s: max((np.dot(sides[s], v) for v in directions), default=0))
             dot.label(str(node), loc=(label_loc or {}).get(node, "left" if node == circuit.ground else side))
         drawing.add(dot)
-        if node == circuit.ground:
+        if node == ground and not split:
             drawing.add(elm.Ground().at(point))
+    for point in terminals.values():
+        drawing.add(elm.Ground().at(point))
     for text, point in (flux_labels or {}).items():
         point = np.asarray(point, dtype=float)
         if point.shape != (2,) or not np.isfinite(point).all():

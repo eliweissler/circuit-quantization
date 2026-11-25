@@ -87,3 +87,83 @@ def test_invalid_flux_label_position(point):
     circuit = Circuit([Branch("J", 1, 0, C=1, EJ=1)], ground=0)
     with pytest.raises(ValueError, match="flux label positions"):
         draw_circuit_diagram(circuit, flux_labels={"Phi": point})
+
+
+def grounds_of(drawing):
+    return [tuple(e.absanchors["start"]) for e in drawing.elements if isinstance(e, elm.Ground)]
+
+
+def grounded_pair():
+    """Two nodes to a string-labelled ground, one with parallel J and L, plus a coupler."""
+    return Circuit([
+        Branch("J1", "a", "gnd", C=1, EJ=1), Branch("L1", "a", "gnd", L=1),
+        Branch("J2", "b", "gnd", C=1, EJ=1), Branch("Cc", "a", "b", C=1),
+    ], ground="gnd")
+
+
+@pytest.mark.parametrize("mode", ["below", "radial"])
+def test_split_grounds_one_symbol_per_grounded_node(mode):
+    assert len(grounds_of(draw_circuit_diagram(grounded_pair(), grounds=mode))) == 2
+
+
+def test_below_terminals_sit_one_scale_below():
+    d = draw_circuit_diagram(grounded_pair(), layout={"a": (0, 0), "b": (1, 0)}, grounds="below")
+    assert sorted(grounds_of(d)) == pytest.approx(sorted([(0, -4), (4, -4)]))
+
+
+def test_radial_terminals_point_away_from_centroid():
+    d = draw_circuit_diagram(grounded_pair(), layout={"a": (-1, 0), "b": (1, 0)}, grounds="radial")
+    assert sorted(grounds_of(d)) == pytest.approx([(-8, 0), (8, 0)])
+
+
+def test_radial_single_node_falls_back_to_below():
+    circuit = Circuit([Branch("J", 1, 0, C=1, EJ=1)], ground=0)
+    assert grounds_of(draw_circuit_diagram(circuit, grounds="radial")) == pytest.approx([(0, -4)])
+
+
+def test_explicit_ground_positions_are_scaled():
+    d = draw_circuit_diagram(grounded_pair(), layout={"a": (0, 0), "b": (1, 0)},
+                             grounds={"a": (0, -1), "b": (2, -1)})
+    assert sorted(grounds_of(d)) == pytest.approx([(0, -4), (8, -4)])
+
+
+def test_explicit_ground_positions_must_cover_grounded_nodes():
+    with pytest.raises(ValueError):
+        draw_circuit_diagram(grounded_pair(), layout={"a": (0, 0), "b": (1, 0)}, grounds={"a": (0, -1)})
+
+
+def test_ground_terminal_on_a_node_raises():
+    with pytest.raises(ValueError):
+        draw_circuit_diagram(grounded_pair(), layout={"a": (0, 0), "b": (1, 0)},
+                             grounds={"a": (1, 0), "b": (1, -1)})
+
+
+def test_unknown_grounds_mode_raises():
+    with pytest.raises(ValueError):
+        draw_circuit_diagram(grounded_pair(), grounds="up")
+
+
+def test_split_grounds_keep_source_polarity():
+    circuit = Circuit([
+        Branch("J", 1, 0, C=1, EJ=1), Branch("Cg", 1, "src", C=1), Branch("Vg", 0, "src", V=1),
+    ], ground=0)
+    d = draw_circuit_diagram(circuit, layout={1: (-1, 1), "src": (0, 1)}, grounds="below")
+    source = next(e for e in d.elements if isinstance(e, elm.SourceV))
+    assert tuple(source.absanchors["end"]) == pytest.approx((0, 4))
+    assert tuple(source.absanchors["start"]) == pytest.approx((0, 0))
+
+
+def test_split_grounds_draw_no_ground_node_label():
+    d = draw_circuit_diagram(grounded_pair(), grounds="below")
+    labels = [lab.label for e in d.elements if isinstance(e, elm.Dot) for lab in e._userlabels]
+    assert "gnd" not in labels
+    assert {"a", "b"} <= set(labels)
+
+
+def test_default_grounds_unchanged():
+    assert len(grounds_of(draw_circuit_diagram(grounded_pair()))) == 1
+
+
+@pytest.mark.parametrize("mode", ["below", "radial"])
+def test_floating_circuit_ignores_grounds(mode):
+    assert not grounds_of(draw_circuit_diagram(zero_pi(), grounds=mode))
